@@ -34,7 +34,7 @@ Do NOT build any of the following right now. Leave clean interfaces for them to 
 | Concern | Tool |
 |---|---|
 | AI graph | LangGraph (Python) |
-| LLM | Google Vertex AI — use `gemini-2.5-flash` via `langchain-google-vertexai` (`ChatVertexAI`) |
+| LLM | Google Vertex AI — use `gemini-2.5-flash` via `langchain-google-genai` (`ChatGoogleGenerativeAI`) |
 | Map rendering | Mapbox GL JS, via `pydeck` in Streamlit |
 | Place search & data | Google Maps Places API (New) |
 | Routing & distance | Google Maps Routes API |
@@ -76,7 +76,7 @@ Enable these APIs in the same GCP project used by `.env`.
 | Places API (New) | `places.googleapis.com` | `tools/gmaps.py`, N2, N3, N4 | Destination search, place details, opening hours/access validation, food stop search |
 | Geocoding API | `geocoding-backend.googleapis.com` | `tools/gmaps.py`, N2 | Convert user start-location text into latitude/longitude |
 | Routes API | `routes.googleapis.com` | `tools/gmaps.py`, N3, N4 | Actual travel-time validation, round-trip route geometry, legs, ETAs |
-| Vertex AI API | `aiplatform.googleapis.com` | `tools/vertex.py`, N1, N5, N6 | Gemini 2.5 Flash calls through `ChatVertexAI` |
+| Vertex AI API | `aiplatform.googleapis.com` | `tools/vertex.py`, N1, N5, N6 | Gemini 2.5 Flash calls through `ChatGoogleGenerativeAI` using the Vertex AI backend |
 
 Do not enable or use Maps JavaScript API, legacy Directions API, Distance Matrix API, Geolocation API, Time Zone API, Roads API, Overpass, ORS, OSRM, or OpenStreetMap API for this build.
 
@@ -95,7 +95,7 @@ Keep external-service calls behind small functions so graph nodes do orchestrati
 | `validate_place_open_for_window()` | `tools/gmaps.py` | N3, N4 | Pure Python validation over Places opening-hours data |
 | `maps_request()` | `tools/gmaps.py` | N2, N3, N4 | Shared Google Maps HTTP request/error handling |
 | `get_mapbox_token()` / `require_mapbox_token()` | `tools/mapbox.py` | Streamlit UI | Local config helper for Mapbox rendering |
-| `get_chat_model()` | `tools/vertex.py` | N1, N5, N6 | Vertex AI Gemini via `ChatVertexAI`, authenticated by ADC by default |
+| `get_chat_model()` | `tools/vertex.py` | N1, N5, N6 | Vertex AI Gemini via `ChatGoogleGenerativeAI`, authenticated by ADC by default |
 
 ---
 

@@ -4,7 +4,7 @@ version = "0.1.0"
 requires-python = ">=3.13"
 dependencies = [
     "langchain-core>=1.4.0",
-    "langchain-google-vertexai>=3.2.3",
+    "langchain-google-genai>=4.2.4",
     "langgraph>=1.2.2",
     "pydeck>=0.9.2",
     "python-dotenv>=1.2.2",
@@ -19,3 +19,6 @@ dev = [
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
+markers = [
+    "live: opt-in tests that call external services",
+]

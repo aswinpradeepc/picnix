@@ -30,7 +30,7 @@ Expected: `pyproject.toml` exists with project name `picnix`.
 
 - [ ] **Step 3: Add runtime dependencies**
 
-Run: `UV_CACHE_DIR=/tmp/uv-cache /home/devaccount/.local/bin/uv add streamlit pydeck langgraph langchain-core langchain-google-vertexai python-dotenv requests`
+Run: `UV_CACHE_DIR=/tmp/uv-cache /home/devaccount/.local/bin/uv add streamlit pydeck langgraph langchain-core langchain-google-genai python-dotenv requests`
 
 Expected: `pyproject.toml` lists runtime dependencies and `uv.lock` is generated.
 
