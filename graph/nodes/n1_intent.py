@@ -78,9 +78,39 @@ def _strip_fenced_json(content: str) -> str:
     return "\n".join(lines).strip()
 
 
-def _parse_payload(content: str) -> dict[str, Any]:
+def _content_to_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                text = item.get("text") or item.get("content")
+                if text:
+                    parts.append(str(text))
+        return "\n".join(parts)
+    return str(content)
+
+
+def _extract_json_text(content: str) -> str:
+    stripped = _strip_fenced_json(content)
+    decoder = json.JSONDecoder()
+    for index, character in enumerate(stripped):
+        if character != "{":
+            continue
+        try:
+            _, end = decoder.raw_decode(stripped[index:])
+        except json.JSONDecodeError:
+            continue
+        return stripped[index : index + end]
+    return stripped
+
+
+def _parse_payload(content: Any) -> dict[str, Any]:
     try:
-        payload = json.loads(_strip_fenced_json(content))
+        payload = json.loads(_extract_json_text(_content_to_text(content)))
     except json.JSONDecodeError as exc:
         raise IntentCollectionError("N1 returned invalid JSON.") from exc
     if not isinstance(payload, dict):
@@ -122,13 +152,16 @@ def collect_intent(state: TripState, *, model: Any | None = None) -> dict[str, A
             "clarification_round": clarification_round,
         }
 
-    chat_model = model or get_chat_model(temperature=0.1)
+    chat_model = model or get_chat_model(
+        temperature=0.1,
+        response_mime_type="application/json",
+    )
     messages = [
         SystemMessage(content=SYSTEM_PROMPT.format(clarification_round=clarification_round)),
         *[_message_from_dict(message) for message in raw_messages],
     ]
     response = chat_model.invoke(messages)
-    payload = _parse_payload(str(response.content))
+    payload = _parse_payload(response.content)
 
     assistant_message = str(payload.get("assistant_message", "")).strip()
     if not assistant_message:

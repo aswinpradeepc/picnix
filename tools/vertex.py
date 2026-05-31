@@ -1,3 +1,5 @@
+from typing import Any
+
 from langchain_google_genai import ChatGoogleGenerativeAI
 
 from config.settings import SETTINGS, Settings
@@ -15,6 +17,7 @@ def get_chat_model(
     settings: Settings = SETTINGS,
     model: str = DEFAULT_GEMINI_MODEL,
     temperature: float = 0.2,
+    **model_options: Any,
 ) -> ChatGoogleGenerativeAI:
     if not settings.google_cloud_project:
         raise VertexConfigurationError("GOOGLE_CLOUD_PROJECT is required for Vertex AI.")
@@ -27,4 +30,5 @@ def get_chat_model(
         location=settings.google_cloud_location,
         vertexai=True,
         temperature=temperature,
+        **model_options,
     )
