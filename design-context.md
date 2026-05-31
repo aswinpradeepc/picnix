@@ -1,0 +1,387 @@
+# Project Brief — Picnix (AI Core + Streamlit UI)
+
+You are starting a greenfield Python project. Read this entire brief before writing a single line of code.
+
+---
+
+## What this is
+
+A conversational AI trip planner for people in Kerala, India who want to spend free time — a weekend, an evening, a day off — without having a plan. The system has a conversation with the user, figures out their constraints, picks a suitable destination, and builds a complete, time-accurate itinerary. It then renders that itinerary on a Mapbox map with waypoints, travel times, food stops, and notes.
+
+This is a personal / non-commercial project. No monetisation, no user accounts, no billing system yet.
+
+---
+
+## Scope for this build — STRICT
+
+Build ONLY these two things:
+
+1. **The AI layer** — a LangGraph graph with 7 nodes (described below)
+2. **A Streamlit UI** — for testing the AI layer interactively, with a chat panel and a Mapbox map panel
+
+Do NOT build any of the following right now. Leave clean interfaces for them to be added later:
+- FastAPI endpoints
+- Token usage calculators or cost tracking
+- User authentication or session management
+- A production web frontend
+- LangSmith or any observability tooling
+- Any database or persistent storage
+
+---
+
+## Tech stack
+
+| Concern | Tool |
+|---|---|
+| AI graph | LangGraph (Python) |
+| LLM | Google Vertex AI — use `gemini-2.5-flash` via `langchain-google-vertexai` (`ChatVertexAI`) |
+| Map rendering | Mapbox GL JS, via `pydeck` in Streamlit |
+| Place search & data | Google Maps Places API (New) |
+| Routing & distance | Google Maps Directions API / Routes API |
+| POI access validation | Google Maps Places API — check opening hours, access details |
+| UI framework | Streamlit |
+| Config | `python-dotenv`, `.env` file for all keys |
+| Package management | `uv`, with `pyproject.toml` and `uv.lock` |
+
+**No other external services.** No Overpass, no ORS, no OSRM, no OpenStreetMap API calls. Google Maps handles all geo data. Mapbox handles all rendering.
+
+### Package management
+
+Use `uv` for dependency management. `pyproject.toml` is the single source of truth for dependencies. Add dependencies with `uv add <package>`, commit `uv.lock`, and run the app with `uv run streamlit run app.py`. Do not create or use `requirements.txt`.
+
+### Environment variables required
+```
+GOOGLE_MAPS_API_KEY=
+MAPBOX_TOKEN=
+GOOGLE_CLOUD_PROJECT=        # your GCP project ID
+GOOGLE_APPLICATION_CREDENTIALS=  # path to service account JSON
+```
+
+---
+
+## LangGraph node architecture
+
+The graph is a `StateGraph`. Every node reads from and writes to a shared `TripState` TypedDict. Define this state schema first, before any node code.
+
+### TripState schema (define this first)
+
+```python
+class TripState(TypedDict):
+    # Set by N1
+    raw_messages: list[dict]          # full conversation history
+    constraints: dict                 # structured JSON: start_location, duration_hours,
+                                      # group_size, vehicle, interests, budget_feel
+    clarification_round: int          # how many question rounds have happened
+
+    # Set by N2
+    isochrone_polygon: dict           # GeoJSON polygon of reachable area
+    candidates: list[dict]            # top 5 destinations with coords, tags, distance
+    candidate_index: int              # which candidate is currently being tried
+
+    # Set by N3
+    validated_destination: dict       # confirmed destination with access/hours verified
+    validation_failures: list[str]    # reasons previous candidates were rejected
+
+    # Set by human interrupt
+    user_confirmed: bool              # True = proceed, False = try next candidate
+
+    # Set by N4
+    route: dict                       # full route GeoJSON + ordered waypoints + ETAs
+    food_stops: list[dict]            # validated food stops along route
+
+    # Set by N5
+    itinerary_draft: str              # human-readable prose itinerary
+
+    # Set by N6
+    claim_failures: list[dict]        # [{claim, reason}] list from validator
+    rewrite_count: int                # how many times N5 has been re-run
+
+    # Set by N7
+    final_geojson: dict               # FeatureCollection for Mapbox rendering
+    final_itinerary: str              # final validated prose
+    timeline: list[dict]              # [{time, label, coords, type, notes}]
+```
+
+---
+
+### N1 — Intent collector
+
+**Type:** Conversational LLM node (no tool calls)
+
+**Responsibility:** Have a friendly, short conversation to extract user constraints. Persona: warm and enthusiastic, like a friend who loves planning trips. Opening line style: *"Aah, sounds like you need a good day out! Let me help plan it. Tell me — where are you starting from?"*
+
+**Rules:**
+- Ask at most 3 questions across the entire conversation, grouped naturally
+- Extract: `start_location` (text), `duration_hours` (float), `group_size` (int), `vehicle` (one of: `bike`, `car`, `public`, `none`), `interests` (list of strings), `budget_feel` (one of: `free`, `low`, `medium`, `splurge`)
+- When enough info is gathered, output structured `constraints` dict to state and signal done
+- If the user is vague, make a reasonable assumption and state it, don't keep asking
+- Use `langchain_core.messages` for conversation history management
+
+**Output:** `constraints` dict in state, `raw_messages` updated
+
+---
+
+### Conditional edge — trip type router
+
+**Type:** Pure Python conditional edge (zero LLM cost)
+
+```python
+def route_trip_type(state: TripState) -> str:
+    hours = state["constraints"]["duration_hours"]
+    if hours <= 14:
+        return "n2_isochrone"
+    else:
+        return "future_multiday"  # dead end node for now, just returns a message
+```
+
+Only the short jolly trip path (`<= 14 hours`) is implemented. The multiday path returns a friendly "coming soon" message.
+
+---
+
+### N2 — Isochrone + candidate fetch
+
+**Type:** Tool-calling node
+
+**Responsibility:** Given the start location and constraints, find the top 5 candidate destinations the user can realistically reach and return from within their time budget.
+
+**Logic:**
+1. Geocode `start_location` using Google Maps Geocoding API → get lat/lng
+2. Calculate max one-way travel time: `(duration_hours - 2) / 2` hours (reserve 2 hrs at destination minimum)
+3. Convert travel time to approximate radius in km based on vehicle type:
+   - `bike`: 45 km/h avg → radius = travel_time_hrs * 45
+   - `car`: 65 km/h avg → radius = travel_time_hrs * 65
+   - `public`/`none`: 30 km/h avg → radius = travel_time_hrs * 30
+4. Use Google Maps Places API (Nearby Search) to find candidate destinations within that radius, filtered by interest tags
+5. Score and rank top 5 by: relevance to interests (keyword match on place types/name), distance fit (closer to max radius scores higher than too-near or too-far), Google rating
+6. Store as `candidates` list in state
+
+**Interest → Google Places type mapping (hardcode this):**
+```python
+INTEREST_TYPE_MAP = {
+    "nature": ["park", "natural_feature", "campground"],
+    "long_rides": ["tourist_attraction", "point_of_interest"],
+    "food": ["restaurant", "cafe", "meal_takeaway"],
+    "beach": ["natural_feature"],
+    "waterfall": ["natural_feature", "park"],
+    "hills": ["natural_feature", "park"],
+    "culture": ["museum", "place_of_worship", "art_gallery"],
+    "shopping": ["shopping_mall", "store"],
+    "movies": ["movie_theater"],
+}
+```
+
+**Output:** `candidates` (list of 5 dicts), `candidate_index` = 0
+
+---
+
+### N3 — Destination validator
+
+**Type:** Tool-calling node with retry loop
+
+**Responsibility:** Validate the current candidate (at `candidate_index`) is actually usable. If it fails, increment `candidate_index` and loop back. If all 5 fail, return a graceful error to user.
+
+**Checks to run (in order, stop on first failure):**
+1. **Google Places Details call** — get opening hours, permanently closed flag, access info
+2. **Is it open?** — check if the place is open during the trip window. If `permanently_closed: true` → fail.
+3. **Opening hours match** — if the trip is on a weekend and the place is closed weekends → fail
+4. **Travel time validation** — call Google Maps Directions API for actual drive/ride time from start → destination. If actual time > `max_one_way_time * 1.3` → fail (accounts for traffic)
+5. **Kerala-specific note check** — hardcode a small dict of known restricted places: `{"Anamudi Peak": "permit required, check DFO office", "Eravikulam NP": "seasonal closure Feb-Mar for nilgiri tahr calving"}`. If destination name matches, add a warning note but don't fail — append to `notes` in the candidate dict.
+
+**Loop edge:** If validation fails → increment `candidate_index` → back to N3. If `candidate_index >= 5` → end with error message.
+
+**Output:** `validated_destination` dict, `validation_failures` list updated
+
+---
+
+### Human-in-the-loop interrupt
+
+**Type:** LangGraph `interrupt_before` on N4
+
+Before N4 runs, pause execution and surface to the Streamlit UI:
+- The destination name, distance, travel time, and a one-sentence description
+- Two buttons: **"Yes, plan this!"** and **"Show me another"**
+
+If **"Show me another"**: add current destination to `validation_failures`, increment `candidate_index`, resume from N3.
+If **"Yes, plan this!"**: set `user_confirmed = True`, proceed to N4.
+
+In Streamlit, implement this using `st.session_state` and the LangGraph checkpoint/resume pattern.
+
+---
+
+### N4 — Route builder
+
+**Type:** Tool-calling node
+
+**Responsibility:** Build the actual route with real ETAs and find food stops.
+
+**Logic:**
+1. Get the full driving/biking route from start → destination → start using Google Maps Directions API (round trip)
+2. Extract waypoints, total distance, legs with step-by-step ETAs
+3. Calculate the timeline:
+   - Departure time = 07:00 (hardcode for v1, make configurable later)
+   - Add travel legs with real ETA from Directions API
+   - Insert a meal stop if travel time to destination > 1.5 hours (breakfast/lunch on the way)
+   - Allocate time at destination based on `duration_hours` minus travel time
+   - Insert return journey with estimated arrival time
+4. For each meal window in the timeline, call Google Maps Places API (Nearby Search along route) to find 1 recommended food stop — filter by rating >= 4.0, type = restaurant or cafe
+5. Validate food stop opening hours using Places Details
+
+**Output:** `route` (GeoJSON LineString + waypoints), `food_stops` list, `timeline` list
+
+---
+
+### N5 — Itinerary composer
+
+**Type:** LLM-only node, no tool calls
+
+**Responsibility:** Write the human-readable itinerary. This node receives all verified facts from state and generates prose. It must only reference place names, times, and distances that exist in `state["timeline"]` and `state["route"]`. It must not invent any facts.
+
+**System prompt for this node (include verbatim):**
+```
+You are a friendly Kerala local trip planner. Write a warm, conversational trip itinerary 
+based ONLY on the structured data provided. Do not invent any place names, travel times, 
+distances, or facts not present in the input data. Use Malayalam words occasionally for 
+warmth (e.g., "njan paranjaal" / "as I'd say", "kidu trip aakum!" / "it'll be a great trip!"). 
+Format: a flowing paragraph per section (morning, journey, destination, return), not bullet points.
+```
+
+**Output:** `itinerary_draft` string
+
+---
+
+### N6 — Claim validator
+
+**Type:** Tool-calling + LLM node
+
+**Responsibility:** Read `itinerary_draft` and verify every specific factual claim in it against the state. This is the hallucination guard.
+
+**Process:**
+1. LLM pass: extract all verifiable claims from the draft as a list — place names, travel times, opening status, distances, food stop names
+2. For each claim, check against `state["route"]`, `state["timeline"]`, `state["validated_destination"]`, `state["food_stops"]`
+3. Flag any claim that does not match the verified state data
+4. If failures > 0: add to `claim_failures`, increment `rewrite_count`, route back to N5 with `claim_failures` appended to the N5 prompt as "do not include these: ..."
+5. Max 3 rewrites (`rewrite_count >= 3`): skip to N7 with a warning note in the final output
+
+**Output:** `claim_failures` list, or routes to N7 if clean
+
+---
+
+### N7 — GeoJSON formatter + final output
+
+**Type:** Pure Python node, no LLM
+
+**Responsibility:** Convert verified state data into structured output for Mapbox rendering.
+
+**Output structure:**
+```python
+final_geojson = {
+    "type": "FeatureCollection",
+    "features": [
+        # LineString for the route
+        {"type": "Feature", "geometry": {"type": "LineString", "coordinates": [...]},
+         "properties": {"type": "route"}},
+        # Point for each waypoint (start, food stop, destination, return)
+        {"type": "Feature", "geometry": {"type": "Point", "coordinates": [lng, lat]},
+         "properties": {"type": "waypoint", "label": "...", "time": "...", "notes": "..."}}
+    ]
+}
+```
+
+Copy `itinerary_draft` to `final_itinerary`. Build `timeline` list. This is the node that Streamlit reads from.
+
+---
+
+## Streamlit UI spec
+
+Two-column layout:
+- **Left column (40%):** Chat interface. Shows conversation history. Text input at bottom. When the human interrupt fires, show the destination card with Yes/Another buttons.
+- **Right column (60%):** `pydeck` map with Mapbox tiles. After N7 completes, render the route LineString and waypoint markers. Clicking a marker shows the timeline entry for that stop in a tooltip.
+
+Use `st.session_state` for:
+- `graph_state` — the current LangGraph state dict
+- `thread_id` — for LangGraph checkpointing
+- `messages` — displayed chat history
+
+Keep the UI code in `app.py`. Keep all graph/node code in `graph/` directory. Keep all tool functions in `tools/` directory.
+
+---
+
+## Project structure
+
+```
+picnix/
+├── .env                    # API keys — never commit
+├── .env.example            # template with key names, no values
+├── .gitignore
+├── pyproject.toml          # project metadata and dependencies
+├── uv.lock                 # locked dependency graph
+├── app.py                  # Streamlit entry point
+├── graph/
+│   ├── __init__.py
+│   ├── state.py            # TripState TypedDict — define first
+│   ├── graph.py            # StateGraph definition, edges, compile
+│   └── nodes/
+│       ├── __init__.py
+│       ├── n1_intent.py
+│       ├── n2_isochrone.py
+│       ├── n3_validator.py
+│       ├── n4_route.py
+│       ├── n5_composer.py
+│       ├── n6_claim_guard.py
+│       └── n7_formatter.py
+├── tools/
+│   ├── __init__.py
+│   ├── gmaps.py            # all Google Maps API calls
+│   └── mapbox.py           # Mapbox token config helpers
+├── config/
+│   ├── __init__.py
+│   └── settings.py         # load .env, export constants
+└── tests/
+    ├── test_state.py
+    ├── test_tools.py
+    └── fixtures/           # sample state dicts for node unit tests
+```
+
+---
+
+## What to build first (strict order)
+
+1. `graph/state.py` — TripState TypedDict. Nothing else until this is reviewed.
+2. `config/settings.py` + `.env.example` — load keys, verify connections
+3. `tools/gmaps.py` — all Google Maps wrapper functions (geocode, places search, directions, place details). Unit test each independently with real API calls in `tests/test_tools.py`.
+4. Node by node: N1 → N2 → N3 → N4 → N5 → N6 → N7. Test each node in isolation with a hardcoded state fixture before wiring into the graph.
+5. `graph/graph.py` — wire all nodes, define edges, add interrupt
+6. `app.py` — Streamlit UI
+
+---
+
+## Future scope — do not build, just leave clean interfaces
+
+### Technical (infrastructure)
+- FastAPI layer wrapping the graph for external API consumers
+- LangSmith integration for tracing and prompt debugging
+- Token usage tracking per graph run
+- User accounts and trip history persistence (PostgreSQL)
+- Production web frontend (React or Next.js)
+- Docker + cloud deployment (Cloud Run on GCP makes sense given Vertex AI)
+
+### Feature (product)
+- Multi-day tour planning flow (separate graph, different node set)
+- Movie and event integration (BookMyShow / KPAC / Google Events)
+- Real-time traffic-aware routing (Google Maps Traffic model)
+- User preference history ("don't suggest places I've been")
+- Zomato/Swiggy integration for food stop reservation links
+- Budget estimation with per-stop cost breakdown
+- WhatsApp share link for the final itinerary
+
+---
+
+## Coding standards
+
+- All node functions must have type hints and a one-paragraph docstring explaining what they read from state and what they write to state
+- All Google Maps API calls must be wrapped in try/except with explicit error messages — never let an API failure crash the graph silently
+- No hardcoded strings outside of `config/settings.py` and the interest→type map in N2
+- The LangGraph graph must be compiled with a `MemorySaver` checkpointer from day one — this is required for the human interrupt to work
+- Use `python-dotenv` and never reference `os.environ` directly — always go through `config/settings.py`
+
+---
