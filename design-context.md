@@ -37,7 +37,7 @@ Do NOT build any of the following right now. Leave clean interfaces for them to 
 | LLM | Google Vertex AI — use `gemini-2.5-flash` via `langchain-google-vertexai` (`ChatVertexAI`) |
 | Map rendering | Mapbox GL JS, via `pydeck` in Streamlit |
 | Place search & data | Google Maps Places API (New) |
-| Routing & distance | Google Maps Directions API / Routes API |
+| Routing & distance | Google Maps Routes API |
 | POI access validation | Google Maps Places API — check opening hours, access details |
 | UI framework | Streamlit |
 | Config | `python-dotenv`, `.env` file for all keys |
@@ -49,13 +49,53 @@ Do NOT build any of the following right now. Leave clean interfaces for them to 
 
 Use `uv` for dependency management. `pyproject.toml` is the single source of truth for dependencies. Add dependencies with `uv add <package>`, commit `uv.lock`, and run the app with `uv run streamlit run app.py`. Do not create or use `requirements.txt`.
 
-### Environment variables required
+### Environment variables
 ```
 GOOGLE_MAPS_API_KEY=
 MAPBOX_TOKEN=
 GOOGLE_CLOUD_PROJECT=        # your GCP project ID
-GOOGLE_APPLICATION_CREDENTIALS=  # path to service account JSON
+GOOGLE_CLOUD_LOCATION=       # use asia-south1 for India/Mumbai Vertex AI
+GOOGLE_APPLICATION_CREDENTIALS=  # optional; leave blank/unset for local ADC OAuth
 ```
+
+For local development, authenticate Vertex AI with Application Default Credentials:
+
+```bash
+gcloud auth application-default login
+gcloud auth application-default set-quota-project <GOOGLE_CLOUD_PROJECT>
+```
+
+Do not set `GOOGLE_APPLICATION_CREDENTIALS` unless using a service account JSON. If it is set, Google auth checks that path before local ADC and can fail even when ADC is configured correctly.
+
+### Required Google Cloud APIs
+
+Enable these APIs in the same GCP project used by `.env`.
+
+| API | Service name | Used by | Purpose |
+|---|---|---|---|
+| Places API (New) | `places.googleapis.com` | `tools/gmaps.py`, N2, N3, N4 | Destination search, place details, opening hours/access validation, food stop search |
+| Geocoding API | `geocoding-backend.googleapis.com` | `tools/gmaps.py`, N2 | Convert user start-location text into latitude/longitude |
+| Routes API | `routes.googleapis.com` | `tools/gmaps.py`, N3, N4 | Actual travel-time validation, round-trip route geometry, legs, ETAs |
+| Vertex AI API | `aiplatform.googleapis.com` | `tools/vertex.py`, N1, N5, N6 | Gemini 2.5 Flash calls through `ChatVertexAI` |
+
+Do not enable or use Maps JavaScript API, legacy Directions API, Distance Matrix API, Geolocation API, Time Zone API, Roads API, Overpass, ORS, OSRM, or OpenStreetMap API for this build.
+
+### Internal tool surface
+
+Keep external-service calls behind small functions so graph nodes do orchestration, not HTTP details.
+
+| Tool function | Module | Nodes | External service |
+|---|---|---|---|
+| `geocode_location()` | `tools/gmaps.py` | N2 | Google Geocoding API |
+| `build_reachable_area_polygon()` | `tools/gmaps.py` | N2 | Pure Python approximate GeoJSON polygon |
+| `search_destinations_nearby()` | `tools/gmaps.py` | N2 | Google Places API (New) Nearby Search |
+| `get_place_details()` | `tools/gmaps.py` | N3, N4 | Google Places API (New) Place Details |
+| `compute_route()` | `tools/gmaps.py` | N3, N4 | Google Routes API `computeRoutes` |
+| `search_food_stops_along_route()` | `tools/gmaps.py` | N4 | Google Places API (New), route-biased search |
+| `validate_place_open_for_window()` | `tools/gmaps.py` | N3, N4 | Pure Python validation over Places opening-hours data |
+| `maps_request()` | `tools/gmaps.py` | N2, N3, N4 | Shared Google Maps HTTP request/error handling |
+| `get_mapbox_token()` / `require_mapbox_token()` | `tools/mapbox.py` | Streamlit UI | Local config helper for Mapbox rendering |
+| `get_chat_model()` | `tools/vertex.py` | N1, N5, N6 | Vertex AI Gemini via `ChatVertexAI`, authenticated by ADC by default |
 
 ---
 
@@ -184,7 +224,7 @@ INTEREST_TYPE_MAP = {
 1. **Google Places Details call** — get opening hours, permanently closed flag, access info
 2. **Is it open?** — check if the place is open during the trip window. If `permanently_closed: true` → fail.
 3. **Opening hours match** — if the trip is on a weekend and the place is closed weekends → fail
-4. **Travel time validation** — call Google Maps Directions API for actual drive/ride time from start → destination. If actual time > `max_one_way_time * 1.3` → fail (accounts for traffic)
+4. **Travel time validation** — call Google Routes API for actual drive/ride time from start → destination. If actual time > `max_one_way_time * 1.3` → fail (accounts for traffic)
 5. **Kerala-specific note check** — hardcode a small dict of known restricted places: `{"Anamudi Peak": "permit required, check DFO office", "Eravikulam NP": "seasonal closure Feb-Mar for nilgiri tahr calving"}`. If destination name matches, add a warning note but don't fail — append to `notes` in the candidate dict.
 
 **Loop edge:** If validation fails → increment `candidate_index` → back to N3. If `candidate_index >= 5` → end with error message.
@@ -215,11 +255,11 @@ In Streamlit, implement this using `st.session_state` and the LangGraph checkpoi
 **Responsibility:** Build the actual route with real ETAs and find food stops.
 
 **Logic:**
-1. Get the full driving/biking route from start → destination → start using Google Maps Directions API (round trip)
+1. Get the full driving/biking route from start → destination → start using Google Routes API (round trip)
 2. Extract waypoints, total distance, legs with step-by-step ETAs
 3. Calculate the timeline:
    - Departure time = 07:00 (hardcode for v1, make configurable later)
-   - Add travel legs with real ETA from Directions API
+   - Add travel legs with real ETA from Routes API
    - Insert a meal stop if travel time to destination > 1.5 hours (breakfast/lunch on the way)
    - Allocate time at destination based on `duration_hours` minus travel time
    - Insert return journey with estimated arrival time
@@ -348,7 +388,7 @@ picnix/
 
 1. `graph/state.py` — TripState TypedDict. Nothing else until this is reviewed.
 2. `config/settings.py` + `.env.example` — load keys, verify connections
-3. `tools/gmaps.py` — all Google Maps wrapper functions (geocode, places search, directions, place details). Unit test each independently with real API calls in `tests/test_tools.py`.
+3. `tools/gmaps.py` — all Google Maps wrapper functions (geocode, places search, routes, place details). Unit test each independently with real API calls in `tests/test_tools.py`.
 4. Node by node: N1 → N2 → N3 → N4 → N5 → N6 → N7. Test each node in isolation with a hardcoded state fixture before wiring into the graph.
 5. `graph/graph.py` — wire all nodes, define edges, add interrupt
 6. `app.py` — Streamlit UI

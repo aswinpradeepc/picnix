@@ -7,6 +7,11 @@ REQUIRED_ENV_KEYS = [
     "GOOGLE_MAPS_API_KEY",
     "MAPBOX_TOKEN",
     "GOOGLE_CLOUD_PROJECT",
+    "GOOGLE_CLOUD_LOCATION",
+]
+
+
+OPTIONAL_ENV_KEYS = [
     "GOOGLE_APPLICATION_CREDENTIALS",
 ]
 
@@ -26,12 +31,14 @@ def test_env_example_lists_required_keys_without_values() -> None:
         if line and not line.startswith("#")
     }
 
-    assert list(lines_by_key) == REQUIRED_ENV_KEYS
-    assert all(lines_by_key[key] == f"{key}=" for key in REQUIRED_ENV_KEYS)
+    expected_keys = REQUIRED_ENV_KEYS + OPTIONAL_ENV_KEYS
+
+    assert list(lines_by_key) == expected_keys
+    assert all(lines_by_key[key] == f"{key}=" for key in expected_keys)
 
 
 def test_load_settings_reads_dotenv_file(tmp_path: Path, monkeypatch) -> None:
-    for key in REQUIRED_ENV_KEYS:
+    for key in REQUIRED_ENV_KEYS + OPTIONAL_ENV_KEYS:
         monkeypatch.delenv(key, raising=False)
 
     env_file = tmp_path / ".env"
@@ -41,7 +48,8 @@ def test_load_settings_reads_dotenv_file(tmp_path: Path, monkeypatch) -> None:
                 "GOOGLE_MAPS_API_KEY=gmaps-key",
                 "MAPBOX_TOKEN=mapbox-token",
                 "GOOGLE_CLOUD_PROJECT=picnix-gcp",
-                "GOOGLE_APPLICATION_CREDENTIALS=/tmp/picnix-service-account.json",
+                "GOOGLE_CLOUD_LOCATION=asia-south1",
+                "GOOGLE_APPLICATION_CREDENTIALS=",
             ]
         ),
         encoding="utf-8",
@@ -53,12 +61,14 @@ def test_load_settings_reads_dotenv_file(tmp_path: Path, monkeypatch) -> None:
     assert settings.google_maps_api_key == "gmaps-key"
     assert settings.mapbox_token == "mapbox-token"
     assert settings.google_cloud_project == "picnix-gcp"
-    assert settings.google_application_credentials == "/tmp/picnix-service-account.json"
+    assert settings.google_cloud_location == "asia-south1"
+    assert settings.google_application_credentials == ""
+    assert settings.vertex_auth_mode == "adc"
     assert settings_module.missing_required_keys(settings) == []
 
 
 def test_missing_required_keys_reports_blank_values(tmp_path: Path, monkeypatch) -> None:
-    for key in REQUIRED_ENV_KEYS:
+    for key in REQUIRED_ENV_KEYS + OPTIONAL_ENV_KEYS:
         monkeypatch.delenv(key, raising=False)
 
     env_file = tmp_path / ".env"
@@ -68,6 +78,7 @@ def test_missing_required_keys_reports_blank_values(tmp_path: Path, monkeypatch)
                 "GOOGLE_MAPS_API_KEY=",
                 "MAPBOX_TOKEN=mapbox-token",
                 "GOOGLE_CLOUD_PROJECT=",
+                "GOOGLE_CLOUD_LOCATION=",
                 "GOOGLE_APPLICATION_CREDENTIALS=/tmp/picnix-service-account.json",
             ]
         ),
@@ -80,4 +91,29 @@ def test_missing_required_keys_reports_blank_values(tmp_path: Path, monkeypatch)
     assert settings_module.missing_required_keys(settings) == [
         "GOOGLE_MAPS_API_KEY",
         "GOOGLE_CLOUD_PROJECT",
+        "GOOGLE_CLOUD_LOCATION",
     ]
+
+
+def test_service_account_path_switches_vertex_auth_mode(tmp_path: Path, monkeypatch) -> None:
+    for key in REQUIRED_ENV_KEYS + OPTIONAL_ENV_KEYS:
+        monkeypatch.delenv(key, raising=False)
+
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "\n".join(
+            [
+                "GOOGLE_MAPS_API_KEY=gmaps-key",
+                "MAPBOX_TOKEN=mapbox-token",
+                "GOOGLE_CLOUD_PROJECT=picnix-gcp",
+                "GOOGLE_CLOUD_LOCATION=asia-south1",
+                "GOOGLE_APPLICATION_CREDENTIALS=/tmp/picnix-service-account.json",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    settings_module = importlib.import_module("config.settings")
+    settings = settings_module.load_settings(env_file, override=True)
+
+    assert settings.vertex_auth_mode == "service_account"
