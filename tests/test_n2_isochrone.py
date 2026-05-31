@@ -1,4 +1,9 @@
-from graph.nodes.n2_isochrone import fetch_isochrone_candidates, route_trip_type
+from graph.nodes.n2_isochrone import (
+    INTEREST_TYPE_MAP,
+    VALID_NEARBY_SEARCH_TYPES,
+    fetch_isochrone_candidates,
+    route_trip_type,
+)
 
 
 class FakeGMaps:
@@ -95,13 +100,21 @@ def test_fetch_isochrone_candidates_calculates_radius_and_ranks_unique_candidate
         {
             "center": {"lat": 9.9312, "lng": 76.2673},
             "radius_km": 195.0,
-            "included_types": ["museum", "place_of_worship", "art_gallery"],
+            "included_types": [
+                "museum",
+                "art_gallery",
+                "cultural_landmark",
+                "historical_place",
+                "hindu_temple",
+                "church",
+                "mosque",
+            ],
             "max_results": 5,
         },
         {
             "center": {"lat": 9.9312, "lng": 76.2673},
             "radius_km": 195.0,
-            "included_types": ["natural_feature"],
+            "included_types": ["beach", "tourist_attraction"],
             "max_results": 5,
         },
     ]
@@ -125,6 +138,19 @@ def test_fetch_isochrone_candidates_uses_default_interest_when_empty() -> None:
     assert fake_gmaps.nearby_calls[0]["radius_km"] == 45.0
     assert fake_gmaps.nearby_calls[0]["included_types"] == [
         "park",
-        "natural_feature",
+        "tourist_attraction",
         "campground",
+        "hiking_area",
+        "nature_preserve",
+        "scenic_spot",
     ]
+
+
+def test_interest_type_map_uses_only_places_api_new_nearby_filter_types() -> None:
+    for interest, mapped_types in INTEREST_TYPE_MAP.items():
+        unsupported = set(mapped_types) - VALID_NEARBY_SEARCH_TYPES
+        assert unsupported == set(), f"{interest} uses unsupported Nearby Search types: {unsupported}"
+
+    forbidden_table_b_types = {"natural_feature", "point_of_interest", "place_of_worship"}
+    for mapped_types in INTEREST_TYPE_MAP.values():
+        assert forbidden_table_b_types.isdisjoint(mapped_types)

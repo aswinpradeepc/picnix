@@ -15,6 +15,7 @@ PLACES_TEXT_SEARCH_URL = "https://places.googleapis.com/v1/places:searchText"
 PLACES_DETAILS_URL = "https://places.googleapis.com/v1/places/{place_id}"
 ROUTES_URL = "https://routes.googleapis.com/directions/v2:computeRoutes"
 EARTH_RADIUS_KM = 6371.0088
+PLACES_NEARBY_MAX_RADIUS_METERS = 50_000
 
 PLACE_FIELD_MASK = ",".join(
     [
@@ -95,14 +96,22 @@ def maps_request(
             json=json_body,
             timeout=timeout,
         )
-        response.raise_for_status()
-        payload = response.json()
     except Exception as exc:
         raise GoogleMapsError(f"Google Maps request failed: {exc}") from exc
+
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = {}
 
     if isinstance(payload, dict) and "error" in payload:
         message = payload["error"].get("message", "unknown Google Maps API error")
         raise GoogleMapsError(message)
+
+    try:
+        response.raise_for_status()
+    except Exception as exc:
+        raise GoogleMapsError(f"Google Maps request failed: {exc}") from exc
 
     return payload
 
@@ -217,6 +226,7 @@ def search_destinations_nearby(
     settings: Settings = SETTINGS,
     max_results: int = 5,
 ) -> list[dict[str, Any]]:
+    search_radius_meters = min(radius_km * 1000, PLACES_NEARBY_MAX_RADIUS_METERS)
     payload = maps_request(
         "POST",
         PLACES_NEARBY_URL,
@@ -231,7 +241,7 @@ def search_destinations_nearby(
                         "latitude": center["lat"],
                         "longitude": center["lng"],
                     },
-                    "radius": radius_km * 1000,
+                    "radius": search_radius_meters,
                 }
             },
         },

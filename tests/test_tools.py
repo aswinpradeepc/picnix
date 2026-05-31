@@ -101,6 +101,25 @@ def test_geocode_location_normalizes_google_response(monkeypatch) -> None:
     }
 
 
+def test_maps_request_surfaces_google_error_message_before_http_error(monkeypatch) -> None:
+    from tools import gmaps
+
+    def fake_request(method, url, **kwargs):
+        return FakeResponse(
+            {"error": {"message": "Unsupported types: natural_feature."}},
+            status_code=400,
+        )
+
+    monkeypatch.setattr(gmaps.requests, "request", fake_request)
+
+    with pytest.raises(gmaps.GoogleMapsError, match="Unsupported types: natural_feature"):
+        gmaps.maps_request(
+            "POST",
+            gmaps.PLACES_NEARBY_URL,
+            settings=make_settings(),
+        )
+
+
 def test_nearby_search_normalizes_candidate_places(monkeypatch) -> None:
     from tools import gmaps
 
@@ -161,6 +180,26 @@ def test_nearby_search_normalizes_candidate_places(monkeypatch) -> None:
             },
         }
     ]
+
+
+def test_nearby_search_caps_radius_to_google_limit(monkeypatch) -> None:
+    from tools import gmaps
+
+    def fake_request(method, url, **kwargs):
+        assert kwargs["json"]["locationRestriction"]["circle"]["radius"] == 50_000
+        return FakeResponse({"places": []})
+
+    monkeypatch.setattr(gmaps.requests, "request", fake_request)
+
+    assert (
+        gmaps.search_destinations_nearby(
+            center={"lat": 9.9312, "lng": 76.2673},
+            radius_km=195,
+            included_types=["tourist_attraction"],
+            settings=make_settings(),
+        )
+        == []
+    )
 
 
 def test_place_details_normalizes_opening_hours(monkeypatch) -> None:
