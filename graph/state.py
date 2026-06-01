@@ -7,11 +7,13 @@ class TripState(TypedDict):
     clarification_round: int          # Number of clarification question rounds already used by N1.
 
     isochrone_polygon: dict           # GeoJSON polygon representing the reachable area from the start location.
-    candidates: list[dict]            # Top 5 candidate destinations with coordinates, tags, distance, and ranking metadata.
-    candidate_index: int              # Index of the candidate currently being validated or presented.
+    candidates: list[dict]            # Top 20 raw candidate destinations with coordinates, tags, distance, and ranking metadata.
+    candidate_index: int              # Raw candidate cursor currently being validated.
 
-    validated_destination: dict       # Destination confirmed usable after access, hours, and travel-time checks.
-    validation_failures: list[str]    # Reasons previous destination candidates were rejected.
+    validated_candidates: list[dict]  # Destinations confirmed usable after access, hours, and travel-time checks.
+    presented_candidate_index: int    # Index of the validated candidate currently shown to the user.
+    validated_destination: dict       # Current validated destination shown to the user.
+    validation_failures: list[str]    # Diagnostic reasons raw destination candidates were rejected.
 
     user_confirmed: bool              # True when the user accepts the destination; False when they request another option.
 

@@ -17,6 +17,9 @@ def test_initial_trip_state_has_expected_defaults() -> None:
     assert state["clarification_round"] == 0
     assert state["candidates"] == []
     assert state["candidate_index"] == 0
+    assert state["validated_candidates"] == []
+    assert state["presented_candidate_index"] == 0
+    assert state["validated_destination"] == {}
     assert state["validation_failures"] == []
     assert state["user_confirmed"] is False
     assert state["timeline"] == []
@@ -53,10 +56,10 @@ def test_run_intent_turn_appends_user_message_and_applies_node_update() -> None:
     assert result["clarification_round"] == 1
 
 
-def test_validate_until_destination_loops_until_candidate_is_valid() -> None:
+def test_validate_until_destination_builds_validated_candidate_queue() -> None:
     state = initial_trip_state()
     state["candidate_index"] = 0
-    state["candidates"] = [{"name": "A"}, {"name": "B"}]
+    state["candidates"] = [{"name": "A"}, {"name": "B"}, {"name": "C"}]
     calls = []
 
     def fake_validator(next_state):
@@ -64,19 +67,26 @@ def test_validate_until_destination_loops_until_candidate_is_valid() -> None:
         if next_state["candidate_index"] == 0:
             return {
                 "candidate_index": 1,
-                "validation_failures": ["A rejected"],
+                "validated_candidates": [{"name": "A"}],
+            }
+        if next_state["candidate_index"] == 1:
+            return {
+                "candidate_index": 2,
+                "validation_failures": ["B rejected"],
             }
         return {
-            "candidate_index": 1,
-            "validation_failures": ["A rejected"],
-            "validated_destination": {"name": "B"},
+            "candidate_index": 3,
+            "validation_failures": ["B rejected"],
+            "validated_candidates": [{"name": "A"}, {"name": "C"}],
         }
 
-    result = validate_until_destination(state, validator=fake_validator)
+    result = validate_until_destination(state, validator=fake_validator, target_count=2)
 
-    assert calls == [0, 1]
-    assert result["validated_destination"] == {"name": "B"}
-    assert result["validation_failures"] == ["A rejected"]
+    assert calls == [0, 1, 2]
+    assert result["validated_candidates"] == [{"name": "A"}, {"name": "C"}]
+    assert result["presented_candidate_index"] == 0
+    assert result["validated_destination"] == {"name": "A"}
+    assert result["validation_failures"] == ["B rejected"]
 
 
 def test_run_candidate_discovery_fetches_then_validates() -> None:
@@ -88,12 +98,18 @@ def test_run_candidate_discovery_fetches_then_validates() -> None:
         return {
             "candidates": [{"name": "A"}],
             "candidate_index": 0,
+            "validated_candidates": [],
+            "presented_candidate_index": 0,
+            "validated_destination": {},
             "isochrone_polygon": {"properties": {"center": {"lat": 1, "lng": 2}}},
         }
 
     def fake_validator(next_state):
         assert next_state["candidates"] == [{"name": "A"}]
-        return {"validated_destination": {"name": "A"}}
+        return {
+            "candidate_index": 1,
+            "validated_candidates": [{"name": "A"}],
+        }
 
     result = run_candidate_discovery(
         state,
@@ -101,25 +117,34 @@ def test_run_candidate_discovery_fetches_then_validates() -> None:
         validator=fake_validator,
     )
 
+    assert result["validated_candidates"] == [{"name": "A"}]
     assert result["validated_destination"] == {"name": "A"}
 
 
-def test_request_next_candidate_moves_past_current_destination() -> None:
+def test_request_next_candidate_advances_within_validated_queue() -> None:
     state = initial_trip_state()
-    state["candidate_index"] = 0
-    state["candidates"] = [{"name": "A"}, {"name": "B"}]
+    state["validated_candidates"] = [{"name": "A"}, {"name": "B"}]
+    state["presented_candidate_index"] = 0
     state["validated_destination"] = {"name": "A"}
-    state["validation_failures"] = []
+    state["validation_failures"] = ["Hidden raw candidate rejected: closed"]
 
-    def fake_validator(next_state):
-        assert next_state["candidate_index"] == 1
-        assert next_state["validated_destination"] == {}
-        return {"validated_destination": {"name": "B"}}
+    result = request_next_candidate(state)
 
-    result = request_next_candidate(state, validator=fake_validator)
-
+    assert result["presented_candidate_index"] == 1
     assert result["validated_destination"] == {"name": "B"}
-    assert result["validation_failures"] == ["A rejected: user requested another option"]
+    assert result["validation_failures"] == ["Hidden raw candidate rejected: closed"]
+
+
+def test_request_next_candidate_clears_destination_when_queue_is_exhausted() -> None:
+    state = initial_trip_state()
+    state["validated_candidates"] = [{"name": "A"}]
+    state["presented_candidate_index"] = 0
+    state["validated_destination"] = {"name": "A"}
+
+    result = request_next_candidate(state)
+
+    assert result["presented_candidate_index"] == 1
+    assert result["validated_destination"] == {}
 
 
 def test_build_graph_compiles_with_checkpointer() -> None:

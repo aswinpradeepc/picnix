@@ -12,6 +12,9 @@ from graph.nodes.n3_validator import validate_destination
 from graph.state import TripState
 
 
+VALIDATED_SUGGESTION_LIMIT = 5
+
+
 def initial_trip_state() -> TripState:
     return {
         "raw_messages": [],
@@ -20,6 +23,8 @@ def initial_trip_state() -> TripState:
         "isochrone_polygon": {},
         "candidates": [],
         "candidate_index": 0,
+        "validated_candidates": [],
+        "presented_candidate_index": 0,
         "validated_destination": {},
         "validation_failures": [],
         "user_confirmed": False,
@@ -63,19 +68,49 @@ def validate_until_destination(
     state: TripState,
     *,
     validator: Callable[[TripState], dict[str, Any]] | None = None,
-    max_attempts: int = 5,
+    target_count: int = VALIDATED_SUGGESTION_LIMIT,
+    max_attempts: int | None = None,
 ) -> TripState:
     next_state = state
     validate = validator or (lambda current: validate_destination(current))
+    attempts = 0
+    attempt_limit = max_attempts or len(next_state.get("candidates", []))
 
-    for _ in range(max_attempts):
-        if next_state.get("validated_destination"):
+    while attempts < attempt_limit:
+        if len(next_state.get("validated_candidates", [])) >= target_count:
             break
         if int(next_state.get("candidate_index", 0)) >= len(next_state.get("candidates", [])):
             break
+        previous_index = int(next_state.get("candidate_index", 0))
+        previous_valid_count = len(next_state.get("validated_candidates", []))
         next_state = apply_updates(next_state, validate(next_state))
+        attempts += 1
+        current_index = int(next_state.get("candidate_index", 0))
+        current_valid_count = len(next_state.get("validated_candidates", []))
+        if current_index == previous_index and current_valid_count == previous_valid_count:
+            break
 
-    return next_state
+    validated_candidates = list(next_state.get("validated_candidates", []))
+    if not validated_candidates:
+        return apply_updates(
+            next_state,
+            {
+                "validated_destination": {},
+                "presented_candidate_index": 0,
+            },
+        )
+
+    presented_index = min(
+        int(next_state.get("presented_candidate_index", 0)),
+        len(validated_candidates) - 1,
+    )
+    return apply_updates(
+        next_state,
+        {
+            "presented_candidate_index": presented_index,
+            "validated_destination": validated_candidates[presented_index],
+        },
+    )
 
 
 def run_candidate_discovery(
@@ -93,20 +128,22 @@ def request_next_candidate(
     *,
     validator: Callable[[TripState], dict[str, Any]] | None = None,
 ) -> TripState:
-    current_destination = state.get("validated_destination", {})
-    current_name = current_destination.get("name", "candidate")
-    next_state = apply_updates(
+    _ = validator
+    validated_candidates = list(state.get("validated_candidates", []))
+    next_index = int(state.get("presented_candidate_index", 0)) + 1
+    next_destination = (
+        validated_candidates[next_index]
+        if next_index < len(validated_candidates)
+        else {}
+    )
+    return apply_updates(
         state,
         {
-            "candidate_index": int(state.get("candidate_index", 0)) + 1,
-            "validated_destination": {},
-            "validation_failures": [
-                *state.get("validation_failures", []),
-                f"{current_name} rejected: user requested another option",
-            ],
+            "presented_candidate_index": next_index,
+            "validated_destination": next_destination,
+            "user_confirmed": False,
         },
     )
-    return validate_until_destination(next_state, validator=validator)
 
 
 def _has_constraints(state: TripState) -> str:
@@ -116,7 +153,7 @@ def _has_constraints(state: TripState) -> str:
 
 
 def _validation_result(state: TripState) -> str:
-    if state.get("validated_destination"):
+    if len(state.get("validated_candidates", [])) >= VALIDATED_SUGGESTION_LIMIT:
         return END
     if int(state.get("candidate_index", 0)) >= len(state.get("candidates", [])):
         return END

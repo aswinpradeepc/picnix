@@ -32,6 +32,12 @@ def destination_summary(destination: dict) -> dict:
     }
 
 
+def destination_empty_message(state: dict) -> str:
+    if state.get("constraints"):
+        return "No more open and reachable suggestions found for this trip window."
+    return "Once Picnix validates a destination, it will appear here."
+
+
 def ensure_session_state() -> None:
     if "graph_state" not in st.session_state:
         st.session_state.graph_state = initial_trip_state()
@@ -61,12 +67,7 @@ def handle_user_message(user_message: str) -> None:
 def render_destination_panel() -> None:
     destination = st.session_state.graph_state.get("validated_destination", {})
     if not destination:
-        st.info("Once Picnix validates a destination, it will appear here.")
-        failures = st.session_state.graph_state.get("validation_failures", [])
-        if failures:
-            st.caption("Validation notes")
-            for failure in failures[-3:]:
-                st.write(f"- {failure}")
+        st.info(destination_empty_message(st.session_state.graph_state))
         return
 
     summary = destination_summary(destination)
@@ -78,16 +79,26 @@ def render_destination_panel() -> None:
     for note in summary["notes"]:
         st.info(note)
 
+    validated_candidates = st.session_state.graph_state.get("validated_candidates", [])
+    presented_index = int(st.session_state.graph_state.get("presented_candidate_index", 0))
+    has_next_candidate = presented_index + 1 < len(validated_candidates)
+
     yes_col, another_col = st.columns(2)
     if yes_col.button("Yes, plan this!", use_container_width=True):
         st.session_state.graph_state["user_confirmed"] = True
         st.session_state.partial_demo_notice = (
             "Destination confirmed. N4 route building is the next implementation step."
         )
-    if another_col.button("Show me another", use_container_width=True):
+    if another_col.button(
+        "Show me another",
+        disabled=not has_next_candidate,
+        use_container_width=True,
+    ):
         with st.spinner("Checking the next validated option..."):
             st.session_state.graph_state = request_next_candidate(st.session_state.graph_state)
         st.rerun()
+    if not has_next_candidate:
+        st.caption("No more validated suggestions are queued for this trip window.")
 
     if st.session_state.partial_demo_notice:
         st.success(st.session_state.partial_demo_notice)

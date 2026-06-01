@@ -115,15 +115,17 @@ class TripState(TypedDict):
 
     # Set by N2
     isochrone_polygon: dict           # GeoJSON polygon of reachable area
-    candidates: list[dict]            # top 5 destinations with coords, tags, distance
-    candidate_index: int              # which candidate is currently being tried
+    candidates: list[dict]            # top 20 raw ranked destinations with coords, tags, distance
+    candidate_index: int              # raw candidate cursor currently being validated
 
     # Set by N3
-    validated_destination: dict       # confirmed destination with access/hours verified
-    validation_failures: list[str]    # reasons previous candidates were rejected
+    validated_candidates: list[dict]  # up to 5 confirmed destinations with access/hours verified
+    presented_candidate_index: int    # user-facing cursor inside validated_candidates
+    validated_destination: dict       # current confirmed destination shown to the user
+    validation_failures: list[str]    # diagnostic reasons raw candidates were rejected
 
     # Set by human interrupt
-    user_confirmed: bool              # True = proceed, False = try next candidate
+    user_confirmed: bool              # True = proceed; False means user has not accepted current suggestion
 
     # Set by N4
     route: dict                       # full route GeoJSON + ordered waypoints + ETAs
@@ -182,7 +184,7 @@ Only the short jolly trip path (`<= 14 hours`) is implemented. The multiday path
 
 **Type:** Tool-calling node
 
-**Responsibility:** Given the start location and constraints, find the top 5 candidate destinations the user can realistically reach and return from within their time budget.
+**Responsibility:** Given the start location and constraints, find a fixed raw pool of 20 ranked candidate destinations. These are not directly shown to the user until N3 validates them.
 
 **Logic:**
 1. Geocode `start_location` using Google Maps Geocoding API → get lat/lng
@@ -191,26 +193,28 @@ Only the short jolly trip path (`<= 14 hours`) is implemented. The multiday path
    - `bike`: 45 km/h avg → radius = travel_time_hrs * 45
    - `car`: 65 km/h avg → radius = travel_time_hrs * 65
    - `public`/`none`: 30 km/h avg → radius = travel_time_hrs * 30
-4. Use Google Maps Places API (Nearby Search) to find candidate destinations within that radius, filtered by interest tags
-5. Score and rank top 5 by: relevance to interests (keyword match on place types/name), distance fit (closer to max radius scores higher than too-near or too-far), Google rating
-6. Store as `candidates` list in state
+4. Use Google Maps Places API (Nearby Search) to find candidate destinations within that radius, filtered by interest tags. Request 20 results per interest search, then dedupe locally.
+5. Score and rank the top 20 raw candidates by: relevance to interests (keyword match on place types/name), distance fit (closer to max radius scores higher than too-near or too-far), Google rating.
+6. Store the raw ranked pool as `candidates` in state. Reset `candidate_index`, `validated_candidates`, `presented_candidate_index`, and `validated_destination`.
 
 **Interest → Google Places type mapping (hardcode this):**
 ```python
 INTEREST_TYPE_MAP = {
-    "nature": ["park", "natural_feature", "campground"],
-    "long_rides": ["tourist_attraction", "point_of_interest"],
+    "nature": ["park", "tourist_attraction", "campground", "hiking_area", "nature_preserve", "scenic_spot"],
+    "long_rides": ["tourist_attraction", "scenic_spot", "observation_deck"],
     "food": ["restaurant", "cafe", "meal_takeaway"],
-    "beach": ["natural_feature"],
-    "waterfall": ["natural_feature", "park"],
-    "hills": ["natural_feature", "park"],
-    "culture": ["museum", "place_of_worship", "art_gallery"],
+    "beach": ["beach", "tourist_attraction"],
+    "waterfall": ["tourist_attraction", "park", "hiking_area"],
+    "hills": ["hiking_area", "park", "tourist_attraction"],
+    "culture": ["museum", "art_gallery", "cultural_landmark", "historical_place", "hindu_temple", "church", "mosque"],
     "shopping": ["shopping_mall", "store"],
     "movies": ["movie_theater"],
 }
 ```
 
-**Output:** `candidates` (list of 5 dicts), `candidate_index` = 0
+Only use Google Places API (New) Nearby Search filter types in this mapping. Do not use response-only Table B types such as `natural_feature`, `point_of_interest`, or `place_of_worship` as `includedTypes`.
+
+**Output:** `candidates` (list of up to 20 raw dicts), `candidate_index` = 0, `validated_candidates` = [], `presented_candidate_index` = 0, `validated_destination` = {}
 
 ---
 
@@ -218,7 +222,7 @@ INTEREST_TYPE_MAP = {
 
 **Type:** Tool-calling node with retry loop
 
-**Responsibility:** Validate the current candidate (at `candidate_index`) is actually usable. If it fails, increment `candidate_index` and loop back. If all 5 fail, return a graceful error to user.
+**Responsibility:** Validate raw candidates from `candidate_index` until the graph has a user-facing queue of 5 usable destinations or the raw pool is exhausted. Failed raw candidates remain diagnostic only.
 
 **Checks to run (in order, stop on first failure):**
 1. **Google Places Details call** — get opening hours, permanently closed flag, access info
@@ -227,9 +231,9 @@ INTEREST_TYPE_MAP = {
 4. **Travel time validation** — call Google Routes API for actual drive/ride time from start → destination. If actual time > `max_one_way_time * 1.3` → fail (accounts for traffic)
 5. **Kerala-specific note check** — hardcode a small dict of known restricted places: `{"Anamudi Peak": "permit required, check DFO office", "Eravikulam NP": "seasonal closure Feb-Mar for nilgiri tahr calving"}`. If destination name matches, add a warning note but don't fail — append to `notes` in the candidate dict.
 
-**Loop edge:** If validation fails → increment `candidate_index` → back to N3. If `candidate_index >= 5` → end with error message.
+**Loop edge:** If validation fails → increment `candidate_index` → back to N3. If validation succeeds → append to `validated_candidates`, increment `candidate_index`, and continue until 5 validated suggestions exist or `candidate_index >= len(candidates)`.
 
-**Output:** `validated_destination` dict, `validation_failures` list updated
+**Output:** `validated_candidates` queue, `validated_destination` set to the first queue item, `validation_failures` list updated for diagnostics.
 
 ---
 
@@ -241,7 +245,7 @@ Before N4 runs, pause execution and surface to the Streamlit UI:
 - The destination name, distance, travel time, and a one-sentence description
 - Two buttons: **"Yes, plan this!"** and **"Show me another"**
 
-If **"Show me another"**: add current destination to `validation_failures`, increment `candidate_index`, resume from N3.
+If **"Show me another"**: increment `presented_candidate_index` and show the next item from `validated_candidates`. Do not add user rejections to `validation_failures`.
 If **"Yes, plan this!"**: set `user_confirmed = True`, proceed to N4.
 
 In Streamlit, implement this using `st.session_state` and the LangGraph checkpoint/resume pattern.

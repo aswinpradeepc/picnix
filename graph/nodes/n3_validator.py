@@ -102,8 +102,16 @@ def validate_destination(
         "route_preview": route,
         "notes": _notes_for_candidate(candidate),
     }
+    validated_candidates = [
+        *list(state.get("validated_candidates", [])),
+        validated_destination,
+    ]
+    presented_index = int(state.get("presented_candidate_index", 0))
     return {
-        "validated_destination": validated_destination,
+        "validated_candidates": validated_candidates,
+        "validated_destination": validated_candidates[presented_index]
+        if presented_index < len(validated_candidates)
+        else validated_candidates[0],
         "validation_failures": list(state.get("validation_failures", [])),
-        "candidate_index": candidate_index,
+        "candidate_index": candidate_index + 1,
     }

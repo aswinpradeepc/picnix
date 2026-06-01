@@ -54,6 +54,8 @@ def base_state(candidate_name="Valid Place"):
             }
         ],
         "candidate_index": 0,
+        "validated_candidates": [],
+        "validated_destination": {},
         "validation_failures": [],
     }
 
@@ -65,10 +67,11 @@ def test_validate_destination_accepts_open_reachable_candidate() -> None:
         trip_start=datetime(2026, 5, 31, 7, 0),
     )
 
+    assert result["validated_candidates"][0]["place_id"] == "place-1"
+    assert result["validated_candidates"][0]["travel_time_seconds"] == 1800
+    assert result["validated_candidates"][0]["distance_meters"] == 40000
     assert result["validated_destination"]["place_id"] == "place-1"
-    assert result["validated_destination"]["travel_time_seconds"] == 1800
-    assert result["validated_destination"]["distance_meters"] == 40000
-    assert result["candidate_index"] == 0
+    assert result["candidate_index"] == 1
     assert result["validation_failures"] == []
 
 
@@ -119,9 +122,26 @@ def test_validate_destination_adds_known_restriction_note_without_rejecting() ->
         trip_start=datetime(2026, 5, 31, 7, 0),
     )
 
-    assert result["validated_destination"]["notes"] == [
+    assert result["validated_candidates"][0]["notes"] == [
         "permit required, check DFO office"
     ]
+
+
+def test_validate_destination_appends_to_existing_validated_queue() -> None:
+    state = base_state()
+    state["validated_candidates"] = [{"place_id": "existing"}]
+
+    result = validate_destination(
+        state,
+        gmaps_client=FakeGMaps(),
+        trip_start=datetime(2026, 5, 31, 7, 0),
+    )
+
+    assert [destination["place_id"] for destination in result["validated_candidates"]] == [
+        "existing",
+        "place-1",
+    ]
+    assert result["validated_destination"]["place_id"] == "existing"
 
 
 def test_validate_destination_reports_no_remaining_candidates() -> None:

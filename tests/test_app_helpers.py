@@ -1,4 +1,4 @@
-from app import destination_summary, format_duration, format_km
+from app import destination_empty_message, destination_summary, format_duration, format_km
 
 
 def test_format_km_formats_meters() -> None:
@@ -26,3 +26,16 @@ def test_destination_summary_uses_available_destination_fields() -> None:
         "description": "Historic palace.",
         "notes": ["Check timings before leaving."],
     }
+
+
+def test_destination_empty_message_hides_validation_failures_from_suggestion_surface() -> None:
+    state = {
+        "constraints": {"start_location": "Kochi"},
+        "candidates": [{"name": "Hidden Raw Candidate"}],
+        "validated_candidates": [],
+        "validation_failures": ["Hidden Raw Candidate rejected: closed during trip window"],
+    }
+
+    assert destination_empty_message(state) == (
+        "No more open and reachable suggestions found for this trip window."
+    )

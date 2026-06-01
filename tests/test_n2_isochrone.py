@@ -109,15 +109,18 @@ def test_fetch_isochrone_candidates_calculates_radius_and_ranks_unique_candidate
                 "church",
                 "mosque",
             ],
-            "max_results": 5,
+            "max_results": 20,
         },
         {
             "center": {"lat": 9.9312, "lng": 76.2673},
             "radius_km": 195.0,
             "included_types": ["beach", "tourist_attraction"],
-            "max_results": 5,
+            "max_results": 20,
         },
     ]
+    assert result["validated_candidates"] == []
+    assert result["presented_candidate_index"] == 0
+    assert result["validated_destination"] == {}
 
 
 def test_fetch_isochrone_candidates_uses_default_interest_when_empty() -> None:
@@ -144,6 +147,73 @@ def test_fetch_isochrone_candidates_uses_default_interest_when_empty() -> None:
         "nature_preserve",
         "scenic_spot",
     ]
+
+
+def test_fetch_isochrone_candidates_normalizes_plural_interest_names() -> None:
+    fake_gmaps = FakeGMaps()
+
+    fetch_isochrone_candidates(
+        {
+            "constraints": {
+                "start_location": "Kochi",
+                "duration_hours": 4,
+                "vehicle": "bike",
+                "interests": ["beaches"],
+            }
+        },
+        gmaps_client=fake_gmaps,
+    )
+
+    assert fake_gmaps.nearby_calls[0]["included_types"] == [
+        "beach",
+        "tourist_attraction",
+    ]
+
+
+def test_fetch_isochrone_candidates_trims_raw_pool_to_twenty_candidates() -> None:
+    class ManyResultsGMaps(FakeGMaps):
+        def search_destinations_nearby(
+            self,
+            *,
+            center,
+            radius_km,
+            included_types,
+            settings=None,
+            max_results=5,
+        ):
+            self.nearby_calls.append(
+                {
+                    "center": center,
+                    "radius_km": radius_km,
+                    "included_types": included_types,
+                    "max_results": max_results,
+                }
+            )
+            return [
+                {
+                    "place_id": f"place-{index}",
+                    "name": f"Place {index}",
+                    "coords": {"lat": 9.9312 + index / 1000, "lng": 76.2673},
+                    "rating": 4.0,
+                    "types": ["tourist_attraction"],
+                    "description": "Candidate.",
+                }
+                for index in range(25)
+            ]
+
+    result = fetch_isochrone_candidates(
+        {
+            "constraints": {
+                "start_location": "Kochi",
+                "duration_hours": 8,
+                "vehicle": "car",
+                "interests": ["long_rides"],
+            }
+        },
+        gmaps_client=ManyResultsGMaps(),
+    )
+
+    assert len(result["candidates"]) == 20
 
 
 def test_interest_type_map_uses_only_places_api_new_nearby_filter_types() -> None:

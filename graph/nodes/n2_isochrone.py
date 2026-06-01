@@ -8,6 +8,9 @@ from graph.state import TripState
 from tools import gmaps
 
 
+RAW_CANDIDATE_POOL_SIZE = 20
+PLACES_RESULTS_PER_INTEREST_SEARCH = 20
+
 VALID_NEARBY_SEARCH_TYPES = {
     "art_gallery",
     "beach",
@@ -59,6 +62,17 @@ INTEREST_TYPE_MAP = {
     "movies": ["movie_theater"],
 }
 
+INTEREST_ALIASES = {
+    "beaches": "beach",
+    "food_places": "food",
+    "foods": "food",
+    "long_ride": "long_rides",
+    "longrides": "long_rides",
+    "movie": "movies",
+    "temple": "culture",
+    "temples": "culture",
+}
+
 VEHICLE_SPEED_KMH = {
     "bike": 45,
     "car": 65,
@@ -97,11 +111,19 @@ def _distance_km(start: dict[str, float], end: dict[str, float]) -> float:
     return 2 * EARTH_RADIUS_KM * asin(sqrt(value))
 
 
+def _normalize_interest(interest: str) -> str:
+    normalized = str(interest).strip().lower().replace("-", "_").replace(" ", "_")
+    normalized = INTEREST_ALIASES.get(normalized, normalized)
+    if normalized.endswith("s") and normalized[:-1] in INTEREST_TYPE_MAP:
+        return normalized[:-1]
+    return normalized
+
+
 def _interest_types(interests: list[str]) -> list[list[str]]:
     selected = interests or ["nature"]
     mapped: list[list[str]] = []
     for interest in selected:
-        types = INTEREST_TYPE_MAP.get(str(interest).strip().lower())
+        types = INTEREST_TYPE_MAP.get(_normalize_interest(str(interest)))
         if types and types not in mapped:
             mapped.append(types)
     return mapped or [INTEREST_TYPE_MAP["nature"]]
@@ -118,7 +140,7 @@ def _relevance_score(candidate: dict[str, Any], interests: list[str]) -> float:
     candidate_types = set(candidate.get("types", []))
     score = 0
     for interest in interests:
-        normalized = str(interest).strip().lower()
+        normalized = _normalize_interest(str(interest))
         mapped_types = set(INTEREST_TYPE_MAP.get(normalized, []))
         if normalized in haystack or candidate_types.intersection(mapped_types):
             score += 1
@@ -163,7 +185,7 @@ def fetch_isochrone_candidates(
             radius_km=radius,
             included_types=included_types,
             settings=settings,
-            max_results=5,
+            max_results=PLACES_RESULTS_PER_INTEREST_SEARCH,
         ):
             place_id = candidate.get("place_id")
             if not place_id or place_id in candidates_by_id:
@@ -185,10 +207,13 @@ def fetch_isochrone_candidates(
         candidates_by_id.values(),
         key=lambda candidate: candidate["score"],
         reverse=True,
-    )[:5]
+    )[:RAW_CANDIDATE_POOL_SIZE]
 
     return {
         "isochrone_polygon": polygon,
         "candidates": ranked,
         "candidate_index": 0,
+        "validated_candidates": [],
+        "presented_candidate_index": 0,
+        "validated_destination": {},
     }
