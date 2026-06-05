@@ -23,6 +23,7 @@ def test_initial_trip_state_has_expected_defaults() -> None:
     assert state["validated_destination"] == {}
     assert state["validation_failures"] == []
     assert state["user_confirmed"] is False
+    assert state["food_availability"] == []
     assert state["timeline"] == []
 
 

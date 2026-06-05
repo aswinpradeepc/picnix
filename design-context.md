@@ -91,7 +91,8 @@ Keep external-service calls behind small functions so graph nodes do orchestrati
 | `search_destinations_nearby()` | `tools/gmaps.py` | N2 | Google Places API (New) Nearby Search |
 | `get_place_details()` | `tools/gmaps.py` | N3, N4 | Google Places API (New) Place Details |
 | `compute_route()` | `tools/gmaps.py` | N3, N4 | Google Routes API `computeRoutes` |
-| `search_food_stops_along_route()` | `tools/gmaps.py` | N4 | Google Places API (New), route-biased search |
+| `search_food_stops_along_route()` | `tools/gmaps.py` | N4 | Google Places API (New), route-biased fallback search |
+| `search_food_spots_near_location()` | `tools/gmaps.py` | N4 | Google Places API (New), restaurant/cafe search around dynamic route or destination coordinates |
 | `validate_place_open_for_window()` | `tools/gmaps.py` | N3, N4 | Pure Python validation over Places opening-hours data |
 | `maps_request()` | `tools/gmaps.py` | N2, N3, N4 | Shared Google Maps HTTP request/error handling |
 | `get_mapbox_token()` / `require_mapbox_token()` | `tools/mapbox.py` | Streamlit UI | Local config helper for Mapbox rendering |
@@ -130,6 +131,8 @@ class TripState(TypedDict):
     # Set by N4
     route: dict                       # full route GeoJSON + ordered waypoints + ETAs
     food_stops: list[dict]            # validated food stops along route
+    food_availability: list[dict]     # meal decisions: eat at destination, route options,
+                                      # eat at home, or carry/parcel guidance
 
     # Set by N5
     itinerary_draft: str              # human-readable prose itinerary
@@ -268,13 +271,19 @@ In Streamlit, implement this using `st.session_state` and the LangGraph checkpoi
 3. Calculate the timeline:
    - Departure time comes from `constraints["departure_time"]`; do not hardcode a fixed default in N4
    - Add travel legs with real ETA from Routes API
-   - Insert a meal stop when the user explicitly asks for a meal such as dinner/lunch/breakfast, when `food` interest overlaps a normal meal window, or when travel time to destination > 1.5 hours
+   - Treat food as a first-class availability decision, not as an automatic restaurant stop
+   - If the destination is food-oriented, satisfy requested meals at the destination instead of adding a separate food stop
+   - If the user returns before or around a normal meal time and did not explicitly request outside food, mark that meal as `eat_at_home`
+   - For explicit meal requests, search dynamically near the destination or sampled route segment where the user is expected to be during that meal window
+   - For remote morning destinations, search dynamically near the outbound route segment; if food cannot be confirmed, add carry/parcel guidance
    - Allocate time at destination based on `duration_hours` minus travel and meal time, then cap destination dwell time by destination type so a single shrine, attraction, museum, or similar place does not consume the entire remaining trip window
    - Insert return journey with estimated arrival time
-4. For each meal window in the timeline, call Google Maps Places API (Nearby Search along route) to find 1 recommended food stop — filter by rating >= 4.0, type = restaurant or cafe. Dinner should usually be placed on the return leg after the destination visit; breakfast/lunch can be placed on the outbound leg when appropriate.
+4. For each actual food need, call Google Maps Places API around dynamic coordinates derived from destination location or route geometry. Do not use static route towns, hubs, cities, or route checkpoints.
 5. Validate food stop opening hours using Places Details
 
-**Output:** `route` (GeoJSON LineString + waypoints), `food_stops` list, `timeline` list
+Food guidance can be one of: `eat_at_destination`, `destination_options`, `route_options`, `eat_at_home`, or `carry_or_parcel`.
+
+**Output:** `route` (GeoJSON LineString + waypoints), `food_stops` list, `food_availability` list, `timeline` list
 
 ---
 
@@ -305,7 +314,7 @@ Format: a flowing paragraph per section (morning, journey, destination, return),
 
 **Process:**
 1. LLM pass: extract all verifiable claims from the draft as a list — place names, travel times, opening status, distances, food stop names
-2. For each claim, check against `state["route"]`, `state["timeline"]`, `state["validated_destination"]`, `state["food_stops"]`
+2. For each claim, check against `state["route"]`, `state["timeline"]`, `state["validated_destination"]`, `state["food_stops"]`, `state["food_availability"]`
 3. Flag any claim that does not match the verified state data
 4. If failures > 0: add to `claim_failures`, increment `rewrite_count`, route back to N5 with `claim_failures` appended to the N5 prompt as "do not include these: ..."
 5. Max 3 rewrites (`rewrite_count >= 3`): skip to N7 with a warning note in the final output

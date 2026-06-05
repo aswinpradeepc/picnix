@@ -1,6 +1,7 @@
 from app import (
     destination_empty_message,
     destination_summary,
+    food_availability_rows,
     format_duration,
     format_km,
     show_destination_actions,
@@ -65,6 +66,26 @@ def test_timeline_rows_shapes_entries_for_streamlit_table() -> None:
             "Stop": "Depart Kochi",
             "Type": "start",
             "Notes": "Start the trip.",
+        }
+    ]
+
+
+def test_food_availability_rows_shapes_entries_for_streamlit_table() -> None:
+    assert food_availability_rows(
+        [
+            {
+                "meal": "dinner",
+                "status": "eat_at_home",
+                "time": "18:50",
+                "notes": "Dinner can be at home.",
+            }
+        ]
+    ) == [
+        {
+            "Meal": "dinner",
+            "Decision": "eat at home",
+            "Time": "18:50",
+            "Notes": "Dinner can be at home.",
         }
     ]
 

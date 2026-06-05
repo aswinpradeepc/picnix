@@ -53,6 +53,18 @@ def timeline_rows(timeline: list[dict]) -> list[dict]:
     ]
 
 
+def food_availability_rows(food_availability: list[dict]) -> list[dict]:
+    return [
+        {
+            "Meal": entry.get("meal", ""),
+            "Decision": entry.get("status", "").replace("_", " "),
+            "Time": entry.get("time", ""),
+            "Notes": entry.get("notes", ""),
+        }
+        for entry in food_availability
+    ]
+
+
 def show_destination_actions(state: dict) -> bool:
     return not bool(state.get("user_confirmed"))
 
@@ -149,6 +161,12 @@ def render_destination_panel() -> None:
         rows = timeline_rows(st.session_state.graph_state.get("timeline", []))
         if rows:
             st.table(rows)
+        food_rows = food_availability_rows(
+            st.session_state.graph_state.get("food_availability", [])
+        )
+        if food_rows:
+            st.subheader("Food")
+            st.table(food_rows)
 
 
 def main() -> None:

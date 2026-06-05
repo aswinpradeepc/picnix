@@ -317,6 +317,46 @@ def test_food_stop_search_uses_search_along_route_parameters(monkeypatch) -> Non
     assert results[0]["name"] == "Good Cafe"
 
 
+def test_food_spot_search_uses_coordinate_location_bias(monkeypatch) -> None:
+    from tools import gmaps
+
+    def fake_request(method, url, **kwargs):
+        assert method == "POST"
+        assert url == "https://places.googleapis.com/v1/places:searchText"
+        assert kwargs["json"]["textQuery"] == "restaurant cafe"
+        assert kwargs["json"]["locationBias"] == {
+            "circle": {
+                "center": {"latitude": 10.1076, "longitude": 76.3518},
+                "radius": 5000,
+            }
+        }
+        return FakeResponse(
+            {
+                "places": [
+                    {
+                        "id": "food-1",
+                        "displayName": {"text": "Route Dinner House"},
+                        "formattedAddress": "Route area",
+                        "location": {"latitude": 10.11, "longitude": 76.35},
+                        "rating": 4.3,
+                        "types": ["restaurant"],
+                        "primaryType": "restaurant",
+                    }
+                ]
+            }
+        )
+
+    monkeypatch.setattr(gmaps.requests, "request", fake_request)
+
+    results = gmaps.search_food_spots_near_location(
+        center={"lat": 10.1076, "lng": 76.3518},
+        settings=make_settings(),
+    )
+
+    assert results[0]["place_id"] == "food-1"
+    assert results[0]["name"] == "Route Dinner House"
+
+
 def test_reachable_area_polygon_is_closed_geojson_polygon() -> None:
     from tools.gmaps import build_reachable_area_polygon
 

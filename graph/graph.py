@@ -31,6 +31,7 @@ def initial_trip_state() -> TripState:
         "user_confirmed": False,
         "route": {},
         "food_stops": [],
+        "food_availability": [],
         "itinerary_draft": "",
         "claim_failures": [],
         "rewrite_count": 0,

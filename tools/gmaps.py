@@ -341,6 +341,38 @@ def search_food_stops_along_route(
     return [_normalize_place(place) for place in payload.get("places", [])]
 
 
+def search_food_spots_near_location(
+    *,
+    center: dict[str, float],
+    settings: Settings = SETTINGS,
+    max_results: int = 5,
+    radius_meters: int = 5000,
+) -> list[dict[str, Any]]:
+    json_body: dict[str, Any] = {
+        "textQuery": "restaurant cafe",
+        "includedType": "restaurant",
+        "maxResultCount": max_results,
+        "locationBias": {
+            "circle": {
+                "center": {
+                    "latitude": center["lat"],
+                    "longitude": center["lng"],
+                },
+                "radius": radius_meters,
+            }
+        },
+    }
+
+    payload = maps_request(
+        "POST",
+        PLACES_TEXT_SEARCH_URL,
+        settings=settings,
+        field_mask=PLACE_FIELD_MASK,
+        json_body=json_body,
+    )
+    return [_normalize_place(place) for place in payload.get("places", [])]
+
+
 def _google_day(value: datetime) -> int:
     return (value.weekday() + 1) % 7
 

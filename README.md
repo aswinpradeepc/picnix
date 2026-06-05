@@ -72,7 +72,7 @@ Implemented:
 - N1 intent collection, including `departure_time` and `duration_hours`.
 - N2 isochrone and candidate discovery.
 - N3 destination validation with markdown-backed known place issues.
-- N4 round-trip route building and food-stop validation.
+- N4 round-trip route building with dynamic food availability decisions.
 - Streamlit partial demo through N4.
 
 Next planned:
