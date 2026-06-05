@@ -6,12 +6,13 @@ from typing import Any
 from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, SystemMessage
 
 from graph.state import TripState
+from graph.nodes.time_utils import normalize_departure_time
 from tools.vertex import get_chat_model
 
 
 OPENING_MESSAGE = (
     "Aah, sounds like you need a good day out! Let me help plan it. "
-    "Tell me - where are you starting from?"
+    "Tell me - where are you starting from, how much time do you have, and when do you want to leave?"
 )
 
 SYSTEM_PROMPT = """You are N1, the Picnix intent collector.
@@ -20,6 +21,7 @@ Persona: warm, brief, enthusiastic Kerala local trip-planning friend.
 
 Collect these constraints:
 - start_location: text
+- departure_time: 24-hour local time string in HH:MM
 - duration_hours: float
 - group_size: int
 - vehicle: one of bike, car, public, none
@@ -29,7 +31,9 @@ Collect these constraints:
 Rules:
 - Ask at most 3 question rounds total. Current clarification_round is {clarification_round}.
 - Group questions naturally.
-- If the user is vague and clarification_round is already 3, make reasonable assumptions and state them.
+- If duration_hours is missing, ask for it explicitly unless clarification_round is already 3.
+- If departure_time is missing, ask for it naturally with the other constraints unless clarification_round is already 3.
+- If the user is vague and clarification_round is already 3, make reasonable assumptions from the trip mood and state them.
 - When enough information is gathered, set done=true and return all constraints.
 - Return only valid JSON with this shape:
 {{
@@ -38,6 +42,7 @@ Rules:
   "asked_question": false,
   "constraints": {{
     "start_location": "...",
+    "departure_time": "09:00",
     "duration_hours": 8.0,
     "group_size": 2,
     "vehicle": "car",
@@ -49,6 +54,8 @@ Rules:
 
 VALID_VEHICLES = {"bike", "car", "public", "none"}
 VALID_BUDGETS = {"free", "low", "medium", "splurge"}
+LONG_TRIP_INTERESTS = {"nature", "long_rides", "beach", "waterfall", "hills", "culture"}
+SHORT_TRIP_INTERESTS = {"food", "shopping", "movies"}
 
 
 class IntentCollectionError(RuntimeError):
@@ -130,15 +137,44 @@ def _normalize_constraints(raw: dict[str, Any]) -> dict[str, Any]:
     interests = raw.get("interests", [])
     if isinstance(interests, str):
         interests = [interests]
+    normalized_interests = [
+        str(interest).strip().lower() for interest in interests if str(interest).strip()
+    ]
+    duration_hours = _normalize_duration_hours(raw.get("duration_hours"), normalized_interests)
 
     return {
         "start_location": str(raw.get("start_location", "")).strip(),
-        "duration_hours": float(raw.get("duration_hours", 0)),
+        "departure_time": normalize_departure_time(
+            raw.get("departure_time"),
+            duration_hours=duration_hours,
+            interests=normalized_interests,
+        ),
+        "duration_hours": duration_hours,
         "group_size": int(raw.get("group_size", 1)),
         "vehicle": vehicle,
-        "interests": [str(interest).strip().lower() for interest in interests if str(interest).strip()],
+        "interests": normalized_interests,
         "budget_feel": budget_feel,
     }
+
+
+def _normalize_duration_hours(value: Any, interests: list[str]) -> float:
+    try:
+        duration_hours = float(value or 0)
+    except (TypeError, ValueError):
+        duration_hours = 0
+
+    if duration_hours > 0:
+        return duration_hours
+
+    normalized_interests = {
+        interest.strip().lower().replace("-", "_").replace(" ", "_")
+        for interest in interests
+    }
+    if normalized_interests.intersection(LONG_TRIP_INTERESTS):
+        return 8.0
+    if normalized_interests.intersection(SHORT_TRIP_INTERESTS):
+        return 4.0
+    return 6.0
 
 
 def collect_intent(state: TripState, *, model: Any | None = None) -> dict[str, Any]:

@@ -9,6 +9,7 @@ from langgraph.graph import END, START, StateGraph
 from graph.nodes.n1_intent import collect_intent
 from graph.nodes.n2_isochrone import fetch_isochrone_candidates, route_trip_type
 from graph.nodes.n3_validator import validate_destination
+from graph.nodes.n4_route import build_route
 from graph.state import TripState
 
 
@@ -123,6 +124,14 @@ def run_candidate_discovery(
     return validate_until_destination(with_candidates, validator=validator)
 
 
+def run_route_builder(
+    state: TripState,
+    *,
+    builder: Callable[[TripState], dict[str, Any]] = build_route,
+) -> TripState:
+    return apply_updates(state, builder(state))
+
+
 def request_next_candidate(
     state: TripState,
     *,
@@ -153,11 +162,14 @@ def _has_constraints(state: TripState) -> str:
 
 
 def _validation_result(state: TripState) -> str:
-    if len(state.get("validated_candidates", [])) >= VALIDATED_SUGGESTION_LIMIT:
-        return END
-    if int(state.get("candidate_index", 0)) >= len(state.get("candidates", [])):
-        return END
-    return "n3_validator"
+    validated_candidates = list(state.get("validated_candidates", []))
+    if len(validated_candidates) < VALIDATED_SUGGESTION_LIMIT and int(
+        state.get("candidate_index", 0)
+    ) < len(state.get("candidates", [])):
+        return "n3_validator"
+    if validated_candidates:
+        return "n4_route"
+    return END
 
 
 def future_multiday_node(state: TripState) -> dict[str, Any]:
@@ -173,6 +185,7 @@ def build_graph():
     workflow.add_node("n1_intent", collect_intent)
     workflow.add_node("n2_isochrone", fetch_isochrone_candidates)
     workflow.add_node("n3_validator", validate_destination)
+    workflow.add_node("n4_route", build_route)
     workflow.add_node("future_multiday", future_multiday_node)
 
     workflow.add_edge(START, "n1_intent")
@@ -191,9 +204,11 @@ def build_graph():
         _validation_result,
         {
             "n3_validator": "n3_validator",
+            "n4_route": "n4_route",
             END: END,
         },
     )
+    workflow.add_edge("n4_route", END)
     workflow.add_edge("future_multiday", END)
 
-    return workflow.compile(checkpointer=MemorySaver())
+    return workflow.compile(checkpointer=MemorySaver(), interrupt_before=["n4_route"])

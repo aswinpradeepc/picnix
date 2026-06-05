@@ -1,25 +1,18 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any
 
 from config.settings import SETTINGS, Settings
+from graph.nodes.time_utils import trip_start_from_constraints
 from graph.state import TripState
 from tools import gmaps
 
 
-KNOWN_RESTRICTED_PLACE_NOTES = {
-    "anamudi peak": "permit required, check DFO office",
-    "eravikulam np": "seasonal closure Feb-Mar for nilgiri tahr calving",
-}
-
-
-def _trip_start_default() -> datetime:
-    now = datetime.now()
-    start = now.replace(hour=7, minute=0, second=0, microsecond=0)
-    if now > start:
-        start += timedelta(days=1)
-    return start
+KNOWN_PLACE_ISSUES_PATH = (
+    Path(__file__).resolve().parents[2] / "docs" / "known-place-issues.md"
+)
 
 
 def _max_one_way_seconds(duration_hours: float) -> int:
@@ -40,12 +33,66 @@ def _failure(
     }
 
 
-def _notes_for_candidate(candidate: dict[str, Any]) -> list[str]:
-    name = str(candidate.get("name", "")).strip().lower()
+def _normalize_name(value: str) -> str:
+    return " ".join(value.strip().lower().split())
+
+
+def load_known_place_issues(path: str | Path = KNOWN_PLACE_ISSUES_PATH) -> list[dict[str, str]]:
+    issue_path = Path(path)
+    if not issue_path.exists():
+        return []
+
+    issues: list[dict[str, str]] = []
+    for line in issue_path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped.startswith("|") or "---" in stripped:
+            continue
+
+        columns = [column.strip() for column in stripped.strip("|").split("|")]
+        if len(columns) < 3 or columns[0].lower() == "place name":
+            continue
+
+        place_name, issue, action = columns[:3]
+        if not place_name or not issue:
+            continue
+
+        issues.append(
+            {
+                "place_name": place_name,
+                "issue": issue,
+                "action": (action or "reject").lower(),
+            }
+        )
+
+    return issues
+
+
+def _known_issue_for_candidate(
+    candidate: dict[str, Any],
+    *,
+    known_issues_path: str | Path = KNOWN_PLACE_ISSUES_PATH,
+) -> dict[str, str] | None:
+    candidate_names = {
+        _normalize_name(str(candidate.get("name", ""))),
+        _normalize_name(str(candidate.get("candidate_name", ""))),
+        _normalize_name(str(candidate.get("display_name", ""))),
+    }
+    candidate_names.discard("")
+    for issue in load_known_place_issues(known_issues_path):
+        if _normalize_name(issue["place_name"]) in candidate_names:
+            return issue
+    return None
+
+
+def _notes_for_candidate(
+    candidate: dict[str, Any],
+    *,
+    known_issues_path: str | Path = KNOWN_PLACE_ISSUES_PATH,
+) -> list[str]:
     notes = list(candidate.get("notes", []))
-    for restricted_name, note in KNOWN_RESTRICTED_PLACE_NOTES.items():
-        if restricted_name == name and note not in notes:
-            notes.append(note)
+    issue = _known_issue_for_candidate(candidate, known_issues_path=known_issues_path)
+    if issue and issue["action"] == "warn" and issue["issue"] not in notes:
+        notes.append(issue["issue"])
     return notes
 
 
@@ -55,6 +102,7 @@ def validate_destination(
     settings: Settings = SETTINGS,
     gmaps_client: Any = gmaps,
     trip_start: datetime | None = None,
+    known_issues_path: str | Path = KNOWN_PLACE_ISSUES_PATH,
 ) -> dict[str, Any]:
     """Read the current candidate and validation context, then write either `validated_destination` or the next `candidate_index` with a failure reason."""
     candidates = list(state.get("candidates", []))
@@ -73,10 +121,23 @@ def validate_destination(
         return _failure(state, candidate, "permanently closed")
 
     duration_hours = float(state["constraints"]["duration_hours"])
-    window_start = trip_start or _trip_start_default()
+    window_start = trip_start or trip_start_from_constraints(state["constraints"])
     window_end = window_start + timedelta(hours=duration_hours)
     if not gmaps_client.validate_place_open_for_window(details, window_start, window_end):
         return _failure(state, candidate, "closed during trip window")
+
+    candidate_with_details = {
+        **candidate,
+        **details,
+        "candidate_name": candidate.get("name", ""),
+        "name": details.get("name") or candidate.get("name", ""),
+    }
+    known_issue = _known_issue_for_candidate(
+        candidate_with_details,
+        known_issues_path=known_issues_path,
+    )
+    if known_issue and known_issue["action"] == "reject":
+        return _failure(state, candidate, f"known place issue: {known_issue['issue']}")
 
     center = state["isochrone_polygon"]["properties"]["center"]
     route = gmaps_client.compute_route(
@@ -100,7 +161,10 @@ def validate_destination(
         "travel_time_seconds": travel_time,
         "distance_meters": route.get("distance_meters", 0),
         "route_preview": route,
-        "notes": _notes_for_candidate(candidate),
+        "notes": _notes_for_candidate(
+            candidate_with_details,
+            known_issues_path=known_issues_path,
+        ),
     }
     validated_candidates = [
         *list(state.get("validated_candidates", [])),

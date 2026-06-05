@@ -109,8 +109,8 @@ The graph is a `StateGraph`. Every node reads from and writes to a shared `TripS
 class TripState(TypedDict):
     # Set by N1
     raw_messages: list[dict]          # full conversation history
-    constraints: dict                 # structured JSON: start_location, duration_hours,
-                                      # group_size, vehicle, interests, budget_feel
+    constraints: dict                 # structured JSON: start_location, departure_time,
+                                      # duration_hours, group_size, vehicle, interests, budget_feel
     clarification_round: int          # how many question rounds have happened
 
     # Set by N2
@@ -150,13 +150,15 @@ class TripState(TypedDict):
 
 **Type:** Conversational LLM node (no tool calls)
 
-**Responsibility:** Have a friendly, short conversation to extract user constraints. Persona: warm and enthusiastic, like a friend who loves planning trips. Opening line style: *"Aah, sounds like you need a good day out! Let me help plan it. Tell me — where are you starting from?"*
+**Responsibility:** Have a friendly, short conversation to extract user constraints. Persona: warm and enthusiastic, like a friend who loves planning trips. Opening line style: *"Aah, sounds like you need a good day out! Let me help plan it. Tell me — where are you starting from, how much time do you have, and when do you want to leave?"*
 
 **Rules:**
 - Ask at most 3 questions across the entire conversation, grouped naturally
-- Extract: `start_location` (text), `duration_hours` (float), `group_size` (int), `vehicle` (one of: `bike`, `car`, `public`, `none`), `interests` (list of strings), `budget_feel` (one of: `free`, `low`, `medium`, `splurge`)
+- Extract: `start_location` (text), `departure_time` (`HH:MM` 24-hour local time), `duration_hours` (float), `group_size` (int), `vehicle` (one of: `bike`, `car`, `public`, `none`), `interests` (list of strings), `budget_feel` (one of: `free`, `low`, `medium`, `splurge`)
+- If `duration_hours` is missing, ask for it explicitly unless the 3-question limit is exhausted.
+- If `departure_time` is missing, ask for it naturally with the other constraints unless the 3-question limit is exhausted.
 - When enough info is gathered, output structured `constraints` dict to state and signal done
-- If the user is vague, make a reasonable assumption and state it, don't keep asking
+- If the user is vague and the 3-question limit is exhausted, make a reasonable assumption from the trip mood and state it, don't keep asking.
 - Use `langchain_core.messages` for conversation history management
 
 **Output:** `constraints` dict in state, `raw_messages` updated
@@ -229,7 +231,9 @@ Only use Google Places API (New) Nearby Search filter types in this mapping. Do 
 2. **Is it open?** — check if the place is open during the trip window. If `permanently_closed: true` → fail.
 3. **Opening hours match** — if the trip is on a weekend and the place is closed weekends → fail
 4. **Travel time validation** — call Google Routes API for actual drive/ride time from start → destination. If actual time > `max_one_way_time * 1.3` → fail (accounts for traffic)
-5. **Kerala-specific note check** — hardcode a small dict of known restricted places: `{"Anamudi Peak": "permit required, check DFO office", "Eravikulam NP": "seasonal closure Feb-Mar for nilgiri tahr calving"}`. If destination name matches, add a warning note but don't fail — append to `notes` in the candidate dict.
+5. **Known place issue check** — read `docs/known-place-issues.md` and match by place name. If a matching row has action `reject`, fail validation and keep the destination out of `validated_candidates`. If a matching row has action `warn`, keep the destination but append the issue to `notes`.
+
+Do not hardcode known restricted places inside prompts or Python node constants. Add durable edge cases to `docs/known-place-issues.md` so future agents can update the list when they discover reliable restrictions or recurring validation issues.
 
 **Loop edge:** If validation fails → increment `candidate_index` → back to N3. If validation succeeds → append to `validated_candidates`, increment `candidate_index`, and continue until 5 validated suggestions exist or `candidate_index >= len(candidates)`.
 
@@ -246,7 +250,7 @@ Before N4 runs, pause execution and surface to the Streamlit UI:
 - Two buttons: **"Yes, plan this!"** and **"Show me another"**
 
 If **"Show me another"**: increment `presented_candidate_index` and show the next item from `validated_candidates`. Do not add user rejections to `validation_failures`.
-If **"Yes, plan this!"**: set `user_confirmed = True`, proceed to N4.
+If **"Yes, plan this!"**: set `user_confirmed = True`, keep that destination as the chosen destination, proceed to N4, and hide the validation choice buttons for that trip.
 
 In Streamlit, implement this using `st.session_state` and the LangGraph checkpoint/resume pattern.
 
@@ -262,7 +266,7 @@ In Streamlit, implement this using `st.session_state` and the LangGraph checkpoi
 1. Get the full driving/biking route from start → destination → start using Google Routes API (round trip)
 2. Extract waypoints, total distance, legs with step-by-step ETAs
 3. Calculate the timeline:
-   - Departure time = 07:00 (hardcode for v1, make configurable later)
+   - Departure time comes from `constraints["departure_time"]`; do not hardcode a fixed default in N4
    - Add travel legs with real ETA from Routes API
    - Insert a meal stop if travel time to destination > 1.5 hours (breakfast/lunch on the way)
    - Allocate time at destination based on `duration_hours` minus travel time

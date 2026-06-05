@@ -7,6 +7,7 @@ from graph.graph import (
     request_next_candidate,
     run_candidate_discovery,
     run_intent_turn,
+    run_route_builder,
 )
 
 
@@ -17,6 +18,8 @@ def format_km(distance_meters: int | float | None) -> str:
 def format_duration(seconds: int | float | None) -> str:
     total_minutes = round((seconds or 0) / 60)
     hours, minutes = divmod(total_minutes, 60)
+    if hours and not minutes:
+        return f"{hours} hr"
     if hours:
         return f"{hours} hr {minutes} min"
     return f"{minutes} min"
@@ -36,6 +39,22 @@ def destination_empty_message(state: dict) -> str:
     if state.get("constraints"):
         return "No more open and reachable suggestions found for this trip window."
     return "Once Picnix validates a destination, it will appear here."
+
+
+def timeline_rows(timeline: list[dict]) -> list[dict]:
+    return [
+        {
+            "Time": entry.get("time", ""),
+            "Stop": entry.get("label", ""),
+            "Type": entry.get("type", ""),
+            "Notes": entry.get("notes", ""),
+        }
+        for entry in timeline
+    ]
+
+
+def show_destination_actions(state: dict) -> bool:
+    return not bool(state.get("user_confirmed"))
 
 
 def ensure_session_state() -> None:
@@ -83,25 +102,53 @@ def render_destination_panel() -> None:
     presented_index = int(st.session_state.graph_state.get("presented_candidate_index", 0))
     has_next_candidate = presented_index + 1 < len(validated_candidates)
 
-    yes_col, another_col = st.columns(2)
-    if yes_col.button("Yes, plan this!", use_container_width=True):
-        st.session_state.graph_state["user_confirmed"] = True
-        st.session_state.partial_demo_notice = (
-            "Destination confirmed. N4 route building is the next implementation step."
+    if show_destination_actions(st.session_state.graph_state):
+        yes_col, another_col = st.columns(2)
+        if yes_col.button("Yes, plan this!", use_container_width=True):
+            accepted_state = {
+                **st.session_state.graph_state,
+                "user_confirmed": True,
+            }
+            with st.spinner("Building the round-trip route and checking food stops..."):
+                st.session_state.graph_state = run_route_builder(accepted_state)
+            st.session_state.partial_demo_notice = (
+                "Route built. N5 itinerary composer is the next implementation step."
+            )
+            st.rerun()
+        if another_col.button(
+            "Show me another",
+            disabled=not has_next_candidate,
+            use_container_width=True,
+        ):
+            with st.spinner("Checking the next validated option..."):
+                st.session_state.graph_state = request_next_candidate(st.session_state.graph_state)
+            st.rerun()
+        if not has_next_candidate:
+            st.caption("No more validated suggestions are queued for this trip window.")
+    else:
+        st.caption(
+            "Destination confirmed. The validated suggestion controls are hidden for this trip."
         )
-    if another_col.button(
-        "Show me another",
-        disabled=not has_next_candidate,
-        use_container_width=True,
-    ):
-        with st.spinner("Checking the next validated option..."):
-            st.session_state.graph_state = request_next_candidate(st.session_state.graph_state)
-        st.rerun()
-    if not has_next_candidate:
-        st.caption("No more validated suggestions are queued for this trip window.")
 
     if st.session_state.partial_demo_notice:
         st.success(st.session_state.partial_demo_notice)
+
+    route = st.session_state.graph_state.get("route", {})
+    if route:
+        st.divider()
+        st.subheader("Route")
+        route_cols = st.columns(2)
+        route_cols[0].metric(
+            "Round trip",
+            format_km(route.get("total_distance_meters")),
+        )
+        route_cols[1].metric(
+            "Planned duration",
+            format_duration(route.get("planned_duration_seconds")),
+        )
+        rows = timeline_rows(st.session_state.graph_state.get("timeline", []))
+        if rows:
+            st.table(rows)
 
 
 def main() -> None:
@@ -118,10 +165,10 @@ def main() -> None:
 
     with right:
         st.title("Trip Preview")
-        st.caption("Partial demo: N1 intent collection, N2 candidate search, and N3 validation.")
+        st.caption("Partial demo: N1 intent collection through N4 route building.")
         render_destination_panel()
         st.divider()
-        st.info("Map route rendering arrives after N4 route builder and N7 GeoJSON formatter.")
+        st.info("Map route rendering arrives after N7 GeoJSON formatter.")
 
 
 if __name__ == "__main__":

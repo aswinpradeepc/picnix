@@ -42,6 +42,7 @@ def test_intent_node_extracts_constraints_from_model_json() -> None:
             "asked_question": False,
             "constraints": {
                 "start_location": "Kochi",
+                "departure_time": "09:30",
                 "duration_hours": "8",
                 "group_size": "2",
                 "vehicle": "car",
@@ -66,6 +67,7 @@ def test_intent_node_extracts_constraints_from_model_json() -> None:
 
     assert result["constraints"] == {
         "start_location": "Kochi",
+        "departure_time": "09:30",
         "duration_hours": 8.0,
         "group_size": 2,
         "vehicle": "car",
@@ -118,6 +120,7 @@ def test_intent_node_strips_markdown_fenced_json() -> None:
           "asked_question": false,
           "constraints": {
             "start_location": "Thrissur",
+            "departure_time": "6am",
             "duration_hours": 6,
             "group_size": 1,
             "vehicle": "bike",
@@ -137,6 +140,7 @@ def test_intent_node_strips_markdown_fenced_json() -> None:
     )
 
     assert result["constraints"]["start_location"] == "Thrissur"
+    assert result["constraints"]["departure_time"] == "06:00"
     assert result["constraints"]["duration_hours"] == 6.0
 
 
@@ -153,6 +157,7 @@ def test_intent_node_extracts_json_when_model_adds_prose() -> None:
           "asked_question": false,
           "constraints": {
             "start_location": "Kollam",
+            "departure_time": "evening",
             "duration_hours": 5,
             "group_size": 3,
             "vehicle": "car",
@@ -172,6 +177,7 @@ def test_intent_node_extracts_json_when_model_adds_prose() -> None:
     )
 
     assert result["constraints"]["start_location"] == "Kollam"
+    assert result["constraints"]["departure_time"] == "17:00"
     assert result["constraints"]["interests"] == ["beach"]
 
 
@@ -189,6 +195,7 @@ def test_intent_node_configures_model_for_json_mode(monkeypatch) -> None:
                 "asked_question": False,
                 "constraints": {
                     "start_location": "Kochi",
+                    "departure_time": "09:00",
                     "duration_hours": 8,
                     "group_size": 2,
                     "vehicle": "car",
@@ -226,6 +233,7 @@ def test_intent_node_reads_text_from_content_blocks() -> None:
                         "asked_question": False,
                         "constraints": {
                             "start_location": "Alappuzha",
+                            "departure_time": "",
                             "duration_hours": 4,
                             "group_size": 2,
                             "vehicle": "car",
@@ -247,3 +255,34 @@ def test_intent_node_reads_text_from_content_blocks() -> None:
     )
 
     assert result["constraints"]["start_location"] == "Alappuzha"
+    assert result["constraints"]["departure_time"] == "17:00"
+
+
+def test_intent_node_makes_reasonable_duration_guess_when_model_omits_it() -> None:
+    from graph.nodes.n1_intent import collect_intent
+
+    model = FakeModel(
+        {
+            "assistant_message": "Set. I will assume this is an evening food plan.",
+            "done": True,
+            "asked_question": False,
+            "constraints": {
+                "start_location": "Kochi",
+                "departure_time": "evening",
+                "group_size": 2,
+                "vehicle": "car",
+                "interests": ["food"],
+                "budget_feel": "medium",
+            },
+        }
+    )
+
+    result = collect_intent(
+        {
+            "raw_messages": [{"role": "user", "content": "Kochi food plan by car"}],
+            "clarification_round": 3,
+        },
+        model=model,
+    )
+
+    assert result["constraints"]["duration_hours"] == 4.0

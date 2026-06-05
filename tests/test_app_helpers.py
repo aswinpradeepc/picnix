@@ -1,4 +1,11 @@
-from app import destination_empty_message, destination_summary, format_duration, format_km
+from app import (
+    destination_empty_message,
+    destination_summary,
+    format_duration,
+    format_km,
+    show_destination_actions,
+    timeline_rows,
+)
 
 
 def test_format_km_formats_meters() -> None:
@@ -7,6 +14,7 @@ def test_format_km_formats_meters() -> None:
 
 def test_format_duration_formats_seconds() -> None:
     assert format_duration(1869) == "31 min"
+    assert format_duration(7200) == "2 hr"
     assert format_duration(7320) == "2 hr 2 min"
 
 
@@ -39,3 +47,28 @@ def test_destination_empty_message_hides_validation_failures_from_suggestion_sur
     assert destination_empty_message(state) == (
         "No more open and reachable suggestions found for this trip window."
     )
+
+
+def test_timeline_rows_shapes_entries_for_streamlit_table() -> None:
+    assert timeline_rows(
+        [
+            {
+                "time": "07:00",
+                "label": "Depart Kochi",
+                "type": "start",
+                "notes": "Start the trip.",
+            }
+        ]
+    ) == [
+        {
+            "Time": "07:00",
+            "Stop": "Depart Kochi",
+            "Type": "start",
+            "Notes": "Start the trip.",
+        }
+    ]
+
+
+def test_show_destination_actions_hides_buttons_after_user_confirms() -> None:
+    assert show_destination_actions({"user_confirmed": False}) is True
+    assert show_destination_actions({"user_confirmed": True}) is False

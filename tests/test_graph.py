@@ -5,6 +5,7 @@ from graph.graph import (
     request_next_candidate,
     run_candidate_discovery,
     run_intent_turn,
+    run_route_builder,
     validate_until_destination,
 )
 
@@ -145,6 +146,24 @@ def test_request_next_candidate_clears_destination_when_queue_is_exhausted() -> 
 
     assert result["presented_candidate_index"] == 1
     assert result["validated_destination"] == {}
+
+
+def test_run_route_builder_applies_route_node_update() -> None:
+    state = initial_trip_state()
+    state["user_confirmed"] = True
+
+    def fake_builder(next_state):
+        assert next_state["user_confirmed"] is True
+        return {
+            "route": {"total_distance_meters": 1000},
+            "food_stops": [],
+            "timeline": [{"time": "07:00", "label": "Depart"}],
+        }
+
+    result = run_route_builder(state, builder=fake_builder)
+
+    assert result["route"] == {"total_distance_meters": 1000}
+    assert result["timeline"] == [{"time": "07:00", "label": "Depart"}]
 
 
 def test_build_graph_compiles_with_checkpointer() -> None:

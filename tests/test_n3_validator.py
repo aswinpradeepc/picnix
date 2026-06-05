@@ -11,11 +11,13 @@ class FakeGMaps:
         open_for_window=True,
         duration_seconds=1800,
         distance_meters=40000,
+        expected_window_start=datetime(2026, 5, 31, 7, 0),
     ) -> None:
         self.business_status = business_status
         self.open_for_window = open_for_window
         self.duration_seconds = duration_seconds
         self.distance_meters = distance_meters
+        self.expected_window_start = expected_window_start
 
     def get_place_details(self, place_id, *, settings=None):
         return {
@@ -26,7 +28,7 @@ class FakeGMaps:
         }
 
     def validate_place_open_for_window(self, details, window_start, window_end):
-        assert window_start == datetime(2026, 5, 31, 7, 0)
+        assert window_start == self.expected_window_start
         return self.open_for_window
 
     def compute_route(self, *, origin, destination, settings=None):
@@ -115,15 +117,42 @@ def test_validate_destination_rejects_route_that_exceeds_budget() -> None:
     ]
 
 
-def test_validate_destination_adds_known_restriction_note_without_rejecting() -> None:
+def test_validate_destination_rejects_known_place_issue_from_markdown() -> None:
     result = validate_destination(
         base_state(candidate_name="Anamudi Peak"),
         gmaps_client=FakeGMaps(),
         trip_start=datetime(2026, 5, 31, 7, 0),
     )
 
-    assert result["validated_candidates"][0]["notes"] == [
-        "permit required, check DFO office"
+    assert "validated_candidates" not in result
+    assert result["candidate_index"] == 1
+    assert result["validation_failures"] == [
+        "Anamudi Peak rejected: known place issue: Permit required; check the DFO office before suggesting."
+    ]
+
+
+def test_validate_destination_reads_known_place_issue_from_supplied_markdown(tmp_path) -> None:
+    issue_file = tmp_path / "known-place-issues.md"
+    issue_file.write_text(
+        "\n".join(
+            [
+                "| Place name | Issue | Action |",
+                "|---|---|---|",
+                "| Valid Place | Monsoon access issue. | reject |",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    result = validate_destination(
+        base_state(),
+        gmaps_client=FakeGMaps(),
+        trip_start=datetime(2026, 5, 31, 7, 0),
+        known_issues_path=issue_file,
+    )
+
+    assert result["validation_failures"] == [
+        "Valid Place rejected: known place issue: Monsoon access issue."
     ]
 
 
