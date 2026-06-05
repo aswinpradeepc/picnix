@@ -69,11 +69,13 @@ class FakeGMaps:
 
 def base_state(*, vehicle: str = "car", duration_hours: float = 6) -> dict:
     return {
+        "raw_messages": [],
         "constraints": {
             "start_location": "Kochi",
             "departure_time": "07:00",
             "duration_hours": duration_hours,
             "vehicle": vehicle,
+            "interests": [],
         },
         "isochrone_polygon": {
             "properties": {"center": {"lat": 9.9312, "lng": 76.2673}}
@@ -84,6 +86,7 @@ def base_state(*, vehicle: str = "car", duration_hours: float = 6) -> dict:
             "coords": {"lat": 10.2859, "lng": 76.5696},
             "description": "Waterfall destination.",
             "notes": [],
+            "types": ["tourist_attraction"],
         },
         "food_stops": [],
         "route": {},
@@ -116,7 +119,7 @@ def test_build_route_creates_round_trip_route_and_timeline_without_food_stop() -
     assert result["food_stops"] == []
     assert result["route"]["total_distance_meters"] == 82_000
     assert result["route"]["travel_duration_seconds"] == 7800
-    assert result["route"]["planned_duration_seconds"] == 21_600
+    assert result["route"]["planned_duration_seconds"] == 15_000
     assert result["route"]["geojson"]["geometry"] == {
         "type": "LineString",
         "coordinates": [
@@ -128,8 +131,8 @@ def test_build_route_creates_round_trip_route_and_timeline_without_food_stop() -
     assert [entry["time"] for entry in result["timeline"]] == [
         "07:00",
         "08:00",
-        "11:50",
-        "13:00",
+        "10:00",
+        "11:10",
     ]
     assert [entry["type"] for entry in result["timeline"]] == [
         "start",
@@ -189,11 +192,66 @@ def test_build_route_adds_validated_food_stop_for_long_outbound_travel() -> None
         "07:00",
         "08:00",
         "09:45",
-        "13:00",
-        "15:00",
+        "11:45",
+        "13:45",
     ]
     assert result["route"]["waypoints"][1]["type"] == "food"
-    assert result["route"]["planned_duration_seconds"] == 28_800
+    assert result["route"]["planned_duration_seconds"] == 24_300
+
+
+def test_build_route_adds_dinner_stop_for_food_interest_short_outbound_travel() -> None:
+    fake_gmaps = FakeGMaps(
+        outbound_seconds=3200,
+        return_seconds=3200,
+        food_results=[
+            {
+                "place_id": "dinner-1",
+                "name": "Kochi Dinner House",
+                "coords": {"lat": 10.1, "lng": 76.42},
+                "rating": 4.4,
+                "types": ["restaurant"],
+                "primary_type": "restaurant",
+            }
+        ],
+    )
+    state = base_state(duration_hours=7)
+    state["constraints"]["departure_time"] = "15:00"
+    state["constraints"]["interests"] = ["food", "culture"]
+    state["raw_messages"] = [
+        {
+            "role": "user",
+            "content": "Starting at 3 pm and back around 10 pm. Include dinner.",
+        }
+    ]
+
+    result = build_route(
+        state,
+        gmaps_client=fake_gmaps,
+        trip_start=datetime(2026, 5, 31, 15, 0),
+    )
+
+    assert fake_gmaps.food_search_calls == [
+        {"route_polyline": "encoded-return", "max_results": 5}
+    ]
+    assert fake_gmaps.validation_windows == [
+        (datetime(2026, 5, 31, 17, 53, 20), datetime(2026, 5, 31, 19, 8, 20))
+    ]
+    assert result["food_stops"][0]["place_id"] == "dinner-1"
+    assert result["food_stops"][0]["notes"] == "Dinner stop on the way."
+    assert [entry["type"] for entry in result["timeline"]] == [
+        "start",
+        "destination",
+        "food",
+        "return",
+    ]
+    assert [entry["time"] for entry in result["timeline"]] == [
+        "15:00",
+        "15:53",
+        "17:53",
+        "20:01",
+    ]
+    assert result["timeline"][1]["notes"] == "Spend 2 hr here."
+    assert result["route"]["waypoints"][2]["type"] == "food"
 
 
 def test_build_route_uses_departure_time_from_constraints() -> None:
@@ -206,8 +264,8 @@ def test_build_route_uses_departure_time_from_constraints() -> None:
     assert [entry["time"] for entry in result["timeline"]] == [
         "09:30",
         "10:30",
-        "14:30",
-        "15:30",
+        "12:30",
+        "13:30",
     ]
 
 

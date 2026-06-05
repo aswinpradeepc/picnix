@@ -268,10 +268,10 @@ In Streamlit, implement this using `st.session_state` and the LangGraph checkpoi
 3. Calculate the timeline:
    - Departure time comes from `constraints["departure_time"]`; do not hardcode a fixed default in N4
    - Add travel legs with real ETA from Routes API
-   - Insert a meal stop if travel time to destination > 1.5 hours (breakfast/lunch on the way)
-   - Allocate time at destination based on `duration_hours` minus travel time
+   - Insert a meal stop when the user explicitly asks for a meal such as dinner/lunch/breakfast, when `food` interest overlaps a normal meal window, or when travel time to destination > 1.5 hours
+   - Allocate time at destination based on `duration_hours` minus travel and meal time, then cap destination dwell time by destination type so a single shrine, attraction, museum, or similar place does not consume the entire remaining trip window
    - Insert return journey with estimated arrival time
-4. For each meal window in the timeline, call Google Maps Places API (Nearby Search along route) to find 1 recommended food stop — filter by rating >= 4.0, type = restaurant or cafe
+4. For each meal window in the timeline, call Google Maps Places API (Nearby Search along route) to find 1 recommended food stop — filter by rating >= 4.0, type = restaurant or cafe. Dinner should usually be placed on the return leg after the destination visit; breakfast/lunch can be placed on the outbound leg when appropriate.
 5. Validate food stop opening hours using Places Details
 
 **Output:** `route` (GeoJSON LineString + waypoints), `food_stops` list, `timeline` list

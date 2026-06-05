@@ -22,7 +22,7 @@ Last updated: 2026-06-06
 - N1 intent collection with Gemini through `ChatGoogleGenerativeAI` using Vertex AI ADC.
 - N2 short-trip candidate discovery with Google Geocoding and Places Nearby Search.
 - N3 destination validation with Places Details, opening-hours checks, markdown-backed known issue checks, and Routes travel-time checks.
-- N4 route builder with round-trip Routes calls, optional food-stop validation, and departure-time-based timeline construction.
+- N4 route builder with round-trip Routes calls, meal-aware food-stop validation, destination dwell-time caps, and departure-time-based timeline construction.
 - Streamlit partial demo for chat, current validated destination, accept, next validated suggestion, locked chosen destination, and N4 route preview.
 
 ## Current Fixed Limits
