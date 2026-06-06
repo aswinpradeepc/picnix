@@ -20,10 +20,11 @@ Date: 2026-06-06
 - `UV_CACHE_DIR=/tmp/uv-cache uv run pytest -v`
 - Full default suite passed: 78 passed, 5 live tests skipped.
 
-## Current Interim Behavior
+## Superseded Interim Behavior
 
-- Clean and warning-only N5 outcomes currently route to `END` because N6 is not implemented yet.
-- Streamlit still uses the helper-based partial demo path and does not visibly execute N5 from the UI.
+- At this checkpoint, clean and warning-only N5 outcomes routed to `END` because N6 was not implemented yet.
+- At this checkpoint, Streamlit still used the helper-based partial demo path and did not visibly execute N5 from the UI.
+- Superseded by `2026-06-06-n6-n7-streamlit-demo.md`: N6/N7 are now implemented and the graph now continues from N5 clean/warning outcomes to N6 and N7.
 
 ## Next
 

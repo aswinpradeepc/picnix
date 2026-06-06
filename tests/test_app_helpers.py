@@ -1,9 +1,12 @@
 from app import (
     destination_empty_message,
+    destination_prompt_message,
     destination_summary,
+    final_geojson_center,
     food_availability_rows,
     format_duration,
     format_km,
+    run_confirmed_destination_pipeline,
     show_destination_actions,
     timeline_rows,
 )
@@ -50,6 +53,19 @@ def test_destination_empty_message_hides_validation_failures_from_suggestion_sur
     )
 
 
+def test_destination_prompt_message_flags_reprompt_after_n5_rejection() -> None:
+    state = {
+        "route_attempt_count": 1,
+        "user_confirmed": False,
+        "validated_destination": {"name": "Fort Kochi"},
+    }
+
+    assert destination_prompt_message(state) == (
+        "That destination couldn't be fully planned - here are the remaining options."
+    )
+    assert destination_prompt_message({"route_attempt_count": 0}) == ""
+
+
 def test_timeline_rows_shapes_entries_for_streamlit_table() -> None:
     assert timeline_rows(
         [
@@ -93,3 +109,99 @@ def test_food_availability_rows_shapes_entries_for_streamlit_table() -> None:
 def test_show_destination_actions_hides_buttons_after_user_confirms() -> None:
     assert show_destination_actions({"user_confirmed": False}) is True
     assert show_destination_actions({"user_confirmed": True}) is False
+
+
+def test_final_geojson_center_uses_feature_coordinates() -> None:
+    center = final_geojson_center(
+        {
+            "type": "FeatureCollection",
+            "features": [
+                {
+                    "type": "Feature",
+                    "geometry": {
+                        "type": "LineString",
+                        "coordinates": [[76.2, 9.9], [76.6, 10.3]],
+                    },
+                    "properties": {"type": "route"},
+                },
+                {
+                    "type": "Feature",
+                    "geometry": {"type": "Point", "coordinates": [76.4, 10.1]},
+                    "properties": {"type": "waypoint"},
+                },
+            ],
+        }
+    )
+
+    assert center == {"latitude": 10.1, "longitude": 76.4, "zoom": 9}
+
+
+def test_pipeline_runs_through_n7_when_n5_allows_plan() -> None:
+    state = {"user_confirmed": True}
+    calls = []
+
+    def fake_route(next_state):
+        calls.append("route")
+        return {**next_state, "route": {"total_distance_meters": 1000}}
+
+    def fake_validator(next_state):
+        calls.append("validator")
+        return {**next_state, "claim_failures": []}
+
+    def fake_composer(next_state):
+        calls.append("composer")
+        return {**next_state, "itinerary_draft": "Draft itinerary."}
+
+    def fake_formatter(next_state):
+        calls.append("formatter")
+        return {
+            **next_state,
+            "final_geojson": {"type": "FeatureCollection", "features": []},
+            "final_itinerary": "Draft itinerary.",
+        }
+
+    result = run_confirmed_destination_pipeline(
+        state,
+        route_runner=fake_route,
+        validator_runner=fake_validator,
+        composer_runner=fake_composer,
+        formatter_runner=fake_formatter,
+    )
+
+    assert calls == ["route", "validator", "composer", "formatter"]
+    assert result["final_itinerary"] == "Draft itinerary."
+
+
+def test_pipeline_stops_for_n5_reprompt() -> None:
+    state = {"user_confirmed": True}
+    calls = []
+
+    def fake_route(next_state):
+        calls.append("route")
+        return {**next_state, "route": {"total_distance_meters": 1000}}
+
+    def fake_validator(next_state):
+        calls.append("validator")
+        return {
+            **next_state,
+            "user_confirmed": False,
+            "validated_candidates": [{"name": "Remaining"}],
+            "validated_destination": {"name": "Remaining"},
+            "claim_failures": [
+                {"field": "timeline", "issue": "Bad route.", "severity": "error"}
+            ],
+        }
+
+    def fake_composer(next_state):
+        calls.append("composer")
+        return next_state
+
+    result = run_confirmed_destination_pipeline(
+        state,
+        route_runner=fake_route,
+        validator_runner=fake_validator,
+        composer_runner=fake_composer,
+    )
+
+    assert calls == ["route", "validator"]
+    assert result["validated_destination"] == {"name": "Remaining"}

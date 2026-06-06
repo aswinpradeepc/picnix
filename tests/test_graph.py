@@ -4,6 +4,8 @@ from graph.graph import (
     build_graph,
     initial_trip_state,
     request_next_candidate,
+    run_final_formatter,
+    run_itinerary_composer,
     run_candidate_discovery,
     run_intent_turn,
     run_route_builder,
@@ -196,6 +198,36 @@ def test_run_structured_validator_applies_n5_update() -> None:
     ]
 
 
+def test_run_itinerary_composer_applies_n6_update() -> None:
+    state = initial_trip_state()
+    state["claim_failures"] = []
+
+    def fake_composer(next_state):
+        assert next_state["claim_failures"] == []
+        return {"itinerary_draft": "Draft itinerary."}
+
+    result = run_itinerary_composer(state, composer=fake_composer)
+
+    assert result["itinerary_draft"] == "Draft itinerary."
+
+
+def test_run_final_formatter_applies_n7_update() -> None:
+    state = initial_trip_state()
+    state["itinerary_draft"] = "Draft itinerary."
+
+    def fake_formatter(next_state):
+        assert next_state["itinerary_draft"] == "Draft itinerary."
+        return {
+            "final_geojson": {"type": "FeatureCollection", "features": []},
+            "final_itinerary": "Draft itinerary.",
+        }
+
+    result = run_final_formatter(state, formatter=fake_formatter)
+
+    assert result["final_geojson"] == {"type": "FeatureCollection", "features": []}
+    assert result["final_itinerary"] == "Draft itinerary."
+
+
 def test_structured_validation_result_routes_error_with_candidates_back_to_n4() -> None:
     state = initial_trip_state()
     state["claim_failures"] = [
@@ -210,7 +242,7 @@ def test_structured_validation_result_routes_error_with_candidates_back_to_n4() 
     assert _structured_validation_result(state) == "n4_route"
 
 
-def test_structured_validation_result_ends_for_clean_warning_or_no_candidates() -> None:
+def test_structured_validation_result_routes_clean_or_warning_to_n6() -> None:
     clean_state = initial_trip_state()
     warning_state = initial_trip_state()
     warning_state["claim_failures"] = [
@@ -220,6 +252,12 @@ def test_structured_validation_result_ends_for_clean_warning_or_no_candidates() 
             "severity": "warning",
         }
     ]
+
+    assert _structured_validation_result(clean_state) == "n6_composer"
+    assert _structured_validation_result(warning_state) == "n6_composer"
+
+
+def test_structured_validation_result_ends_error_when_no_candidates_remain() -> None:
     exhausted_state = initial_trip_state()
     exhausted_state["claim_failures"] = [
         {
@@ -229,8 +267,6 @@ def test_structured_validation_result_ends_for_clean_warning_or_no_candidates() 
         }
     ]
 
-    assert _structured_validation_result(clean_state) == "__end__"
-    assert _structured_validation_result(warning_state) == "__end__"
     assert _structured_validation_result(exhausted_state) == "__end__"
 
 

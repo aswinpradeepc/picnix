@@ -11,6 +11,8 @@ from graph.nodes.n2_isochrone import fetch_isochrone_candidates, route_trip_type
 from graph.nodes.n3_validator import validate_destination
 from graph.nodes.n4_route import build_route
 from graph.nodes.n5_validator import validate_structured_output
+from graph.nodes.n6_composer import compose_itinerary
+from graph.nodes.n7_formatter import format_final_output
 from graph.state import TripState
 
 
@@ -143,6 +145,22 @@ def run_structured_validator(
     return apply_updates(state, validator(state))
 
 
+def run_itinerary_composer(
+    state: TripState,
+    *,
+    composer: Callable[[TripState], dict[str, Any]] = compose_itinerary,
+) -> TripState:
+    return apply_updates(state, composer(state))
+
+
+def run_final_formatter(
+    state: TripState,
+    *,
+    formatter: Callable[[TripState], dict[str, Any]] = format_final_output,
+) -> TripState:
+    return apply_updates(state, formatter(state))
+
+
 def request_next_candidate(
     state: TripState,
     *,
@@ -190,6 +208,8 @@ def _structured_validation_result(state: TripState) -> str:
     )
     if has_error and state.get("validated_candidates"):
         return "n4_route"
+    if not has_error:
+        return "n6_composer"
     return END
 
 
@@ -208,6 +228,8 @@ def build_graph():
     workflow.add_node("n3_validator", validate_destination)
     workflow.add_node("n4_route", build_route)
     workflow.add_node("n5_validator", validate_structured_output)
+    workflow.add_node("n6_composer", compose_itinerary)
+    workflow.add_node("n7_formatter", format_final_output)
     workflow.add_node("future_multiday", future_multiday_node)
 
     workflow.add_edge(START, "n1_intent")
@@ -236,9 +258,12 @@ def build_graph():
         _structured_validation_result,
         {
             "n4_route": "n4_route",
+            "n6_composer": "n6_composer",
             END: END,
         },
     )
+    workflow.add_edge("n6_composer", "n7_formatter")
+    workflow.add_edge("n7_formatter", END)
     workflow.add_edge("future_multiday", END)
 
     return workflow.compile(checkpointer=MemorySaver(), interrupt_before=["n4_route"])

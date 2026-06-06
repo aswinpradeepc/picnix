@@ -1,6 +1,6 @@
 # Picnix Project Status
 
-Last updated: 2026-06-06 (implementation session — N5 structured validator)
+Last updated: 2026-06-06 (implementation session — N6/N7 and Streamlit demo)
 
 ## Source Of Truth
 
@@ -24,8 +24,10 @@ Last updated: 2026-06-06 (implementation session — N5 structured validator)
 - N3 destination validation with Places Details, opening-hours checks, markdown-backed known issue checks, and Routes travel-time checks.
 - N4 route builder with round-trip Routes calls, first-class dynamic food availability decisions, destination dwell-time caps, and departure-time-based timeline construction.
 - N5 structured output validator with Python structural checks, Gemini semantic validation, claim failure state, and N5 error re-prompt state updates.
-- LangGraph wiring now runs `n4_route → n5_validator`; N5 errors with remaining candidates route back to `n4_route` so the existing `interrupt_before` can re-prompt.
-- Streamlit partial demo for chat, current validated destination, accept, next validated suggestion, locked chosen destination, N4 route preview, and food availability decisions.
+- N6 itinerary composer with one structured Gemini call, inline claim audit, and unverified-claim stripping before writing `itinerary_draft`.
+- N7 GeoJSON formatter that builds `final_geojson` from route/timeline and copies `itinerary_draft` to `final_itinerary`.
+- LangGraph wiring now runs `n4_route → n5_validator → n6_composer → n7_formatter → END`; N5 errors with remaining candidates route back to `n4_route` so the existing `interrupt_before` can re-prompt.
+- Streamlit demo for chat, validated destination selection, N5 re-prompt messaging, N4 route/timeline/food preview, N6 final itinerary text, and N7 Mapbox/pydeck route rendering.
 
 ## Current Fixed Limits
 
@@ -44,30 +46,14 @@ Last updated: 2026-06-06 (implementation session — N5 structured validator)
 
 ## Designed But Not Yet Implemented
 
-The following contracts are fully specified in `design-context.md` and their ADRs. The next implementation session should continue from N6.
+The original strict AI-layer node path is now implemented through N7. Remaining work is UI/ops polish, not new graph nodes.
 
-### N6 — Itinerary composer (`graph/nodes/n6_composer.py`)
-
-Single structured LLM call that both writes prose and self-audits every factual claim. Returns `{prose, claim_audit: [{claim, source_field, verified}]}`. Claims with `verified: false` are stripped before writing `itinerary_draft`.
-
-System prompt and output schema are specified verbatim in `design-context.md`.
-
-State written: `itinerary_draft`.
-
-### N7 — GeoJSON formatter (`graph/nodes/n7_formatter.py`)
-
-Pure Python. Builds `final_geojson` FeatureCollection from `route` and `timeline`. Copies `itinerary_draft` → `final_itinerary`. Schema specified in `design-context.md`.
-
-State written: `final_geojson`, `final_itinerary`.
-
-### Graph wiring (`graph/graph.py`)
-
-- Add nodes: `n6_composer`, `n7_formatter`.
-- Replace the current interim N5 clean/warning `END` path with `n6_composer`.
-- Add edge `n6_composer → n7_formatter → END`.
-- Update Streamlit `app.py` to detect `route_attempt_count > 0` on re-interrupt and render the filtered candidate list with an explanation.
+- Replace the Streamlit helper-based demo flow with direct compiled LangGraph checkpoint/resume usage if stricter parity with `interrupt_before` behavior is needed.
+- Improve Mapbox marker styling/layers once real demo feedback is available.
+- Future-scope items from `design-context.md` remain out of scope: FastAPI, auth, persistence, observability, production frontend, and multi-day planning.
 
 ## Latest Checkpoint
 
 - `docs/superpowers/checkpoints/2026-06-06-dynamic-food-availability.md` — N4 dynamic food availability, route-derived food search, eat-at-destination/eat-at-home/carry-or-parcel decisions, and next planning change.
 - `docs/superpowers/checkpoints/2026-06-06-n5-structured-validator.md` — N5 structured output validator implementation, graph wiring, tests, and remaining N6/N7/UI work.
+- `docs/superpowers/checkpoints/2026-06-06-n6-n7-streamlit-demo.md` — N6/N7 implementation, full graph wiring through final output, Streamlit demo updates, and test/server verification.
