@@ -2,7 +2,7 @@ import json
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from graph.nodes.n6_composer import compose_itinerary
+from graph.nodes.n6_composer import COMPOSER_RESPONSE_SCHEMA, compose_itinerary
 
 
 class FakeResponse:
@@ -199,6 +199,40 @@ def test_composer_extracts_json_when_model_adds_prose() -> None:
     assert result["itinerary_draft"] == "Destination: Spend 2 hr at Athirappilly Falls."
 
 
+def test_composer_accepts_itinerary_alias_from_unconstrained_json_output() -> None:
+    model = FakeModel(
+        {
+            "itinerary": "Morning: Leave Kochi at 07:00. Return by 11:00.",
+            "claim_audit": [],
+        }
+    )
+
+    result = compose_itinerary(base_state(), model=model)
+
+    assert result["itinerary_draft"] == "Morning: Leave Kochi at 07:00. Return by 11:00."
+
+
+def test_composer_flattens_sectioned_itinerary_alias() -> None:
+    model = FakeModel(
+        {
+            "itinerary": {
+                "morning": "Morning: Leave Kochi at 07:00.",
+                "journey": "Journey: Reach Athirappilly Falls at 08:00.",
+                "return": "Return: Back at Kochi by 11:00.",
+            },
+            "claim_audit": [],
+        }
+    )
+
+    result = compose_itinerary(base_state(), model=model)
+
+    assert result["itinerary_draft"] == (
+        "Morning: Leave Kochi at 07:00.\n\n"
+        "Journey: Reach Athirappilly Falls at 08:00.\n\n"
+        "Return: Back at Kochi by 11:00."
+    )
+
+
 def test_composer_configures_default_model_for_json_mode(monkeypatch) -> None:
     from graph.nodes import n6_composer
 
@@ -226,3 +260,5 @@ def test_composer_configures_default_model_for_json_mode(monkeypatch) -> None:
     assert result["itinerary_draft"] == "Return: Back at Kochi by 11:00."
     assert captured_kwargs["temperature"] == 0.3
     assert captured_kwargs["response_mime_type"] == "application/json"
+    assert captured_kwargs["response_schema"] == COMPOSER_RESPONSE_SCHEMA
+    assert captured_kwargs["response_schema"]["required"] == ["prose", "claim_audit"]

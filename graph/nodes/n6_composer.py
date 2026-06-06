@@ -19,6 +19,29 @@ After writing the prose, list every factual claim with its source field from the
 whether it is verified (true/false). Return the result as the structured JSON schema given.
 """
 
+COMPOSER_RESPONSE_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {
+        "prose": {
+            "type": "string",
+            "description": "Full human-readable itinerary text.",
+        },
+        "claim_audit": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "claim": {"type": "string"},
+                    "source_field": {"type": "string"},
+                    "verified": {"type": "boolean"},
+                },
+                "required": ["claim", "source_field", "verified"],
+            },
+        },
+    },
+    "required": ["prose", "claim_audit"],
+}
+
 
 class ItineraryCompositionError(RuntimeError):
     pass
@@ -67,24 +90,77 @@ def _extract_json_text(content: str) -> str:
     return stripped
 
 
+def _sectioned_prose(value: dict[str, Any]) -> str:
+    ordered_keys = ["morning", "journey", "destination", "food", "return", "notes"]
+    segments: list[str] = []
+    seen: set[str] = set()
+
+    for key in ordered_keys:
+        section = value.get(key)
+        if isinstance(section, str) and section.strip():
+            segments.append(section.strip())
+            seen.add(key)
+
+    for key, section in value.items():
+        if key in seen:
+            continue
+        if isinstance(section, str) and section.strip():
+            segments.append(section.strip())
+
+    return "\n\n".join(segments).strip()
+
+
+def _prose_value_to_text(value: Any) -> str:
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, dict):
+        return _sectioned_prose(value)
+    if isinstance(value, list):
+        segments = [_prose_value_to_text(item) for item in value]
+        return "\n\n".join(segment for segment in segments if segment).strip()
+    return ""
+
+
+def _extract_prose(payload: dict[str, Any]) -> str:
+    for key in (
+        "prose",
+        "itinerary",
+        "itinerary_text",
+        "itinerary_draft",
+        "final_itinerary",
+        "text",
+        "content",
+    ):
+        prose = _prose_value_to_text(payload.get(key))
+        if prose:
+            return prose
+
+    sections = _prose_value_to_text(payload.get("sections"))
+    if sections:
+        return sections
+
+    raise ItineraryCompositionError("N6 response missing prose.")
+
+
 def _parse_composer_payload(content: Any) -> dict[str, Any]:
-    try:
-        payload = json.loads(_extract_json_text(_content_to_text(content)))
-    except json.JSONDecodeError as exc:
-        raise ItineraryCompositionError("N6 returned invalid JSON.") from exc
+    if isinstance(content, dict):
+        payload = content
+    else:
+        try:
+            payload = json.loads(_extract_json_text(_content_to_text(content)))
+        except json.JSONDecodeError as exc:
+            raise ItineraryCompositionError("N6 returned invalid JSON.") from exc
 
     if not isinstance(payload, dict):
         raise ItineraryCompositionError("N6 JSON response must be an object.")
-    prose = payload.get("prose")
-    if not isinstance(prose, str) or not prose.strip():
-        raise ItineraryCompositionError("N6 response missing prose.")
+    prose = _extract_prose(payload)
 
     claim_audit = payload.get("claim_audit", [])
     if not isinstance(claim_audit, list):
         raise ItineraryCompositionError("N6 claim_audit must be a list.")
 
     return {
-        "prose": prose.strip(),
+        "prose": prose,
         "claim_audit": claim_audit,
     }
 
@@ -156,6 +232,7 @@ def compose_itinerary(
     chat_model = model or get_chat_model(
         temperature=0.3,
         response_mime_type="application/json",
+        response_schema=COMPOSER_RESPONSE_SCHEMA,
     )
     messages = [
         SystemMessage(content=SYSTEM_PROMPT),

@@ -351,6 +351,11 @@ N5 never silently presents an error-flagged plan to N6 and never silently switch
 }
 ```
 
+**Implementation requirement:** Configure the Gemini call with both
+`response_mime_type="application/json"` and a `response_schema` matching the schema
+above. JSON MIME mode alone only asks for JSON; it does not enforce exact keys such as
+`prose`, and live responses may otherwise drift to aliases like `itinerary`.
+
 **Process:**
 1. Pass all N5-validated state to the LLM: `timeline`, `route`, `validated_destination`, `food_stops`, `food_availability`, and any `claim_failures` from N5.
 2. The LLM composes prose and for every factual statement (place name, time, distance, food stop name) records the source state field and whether the value was found there.
