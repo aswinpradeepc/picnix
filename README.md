@@ -64,21 +64,3 @@ Live external-service smoke tests are skipped by default. To enable them:
 ```bash
 PICNIX_RUN_LIVE_TESTS=1 uv run pytest -m live
 ```
-
-## Current Graph Slice
-
-Implemented:
-
-- N1 intent collection, including `departure_time` and `duration_hours`.
-- N2 isochrone and candidate discovery.
-- N3 destination validation with markdown-backed known place issues.
-- N4 round-trip route building with dynamic food availability decisions.
-- Streamlit partial demo through N4.
-
-Next planned:
-
-- N5 itinerary composer.
-- N6 claim validator and rewrite loop.
-- N7 final GeoJSON formatter and Mapbox rendering.
-
-Known destination restrictions live in `docs/known-place-issues.md`.

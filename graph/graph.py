@@ -34,6 +34,7 @@ def initial_trip_state() -> TripState:
         "food_availability": [],
         "itinerary_draft": "",
         "claim_failures": [],
+        "route_attempt_count": 0,
         "rewrite_count": 0,
         "final_geojson": {},
         "final_itinerary": "",

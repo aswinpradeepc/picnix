@@ -134,12 +134,13 @@ class TripState(TypedDict):
     food_availability: list[dict]     # meal decisions: eat at destination, route options,
                                       # eat at home, or carry/parcel guidance
 
-    # Set by N5
-    itinerary_draft: str              # human-readable prose itinerary
-
     # Set by N6
-    claim_failures: list[dict]        # [{claim, reason}] list from validator
-    rewrite_count: int                # how many times N5 has been re-run
+    itinerary_draft: str              # human-readable prose itinerary with inline self-check
+
+    # Set by N5
+    claim_failures: list[dict]        # [{field, issue, severity}] structured output validation issues from N5
+    route_attempt_count: int          # how many times N5 has routed back to N4 with a different destination
+    rewrite_count: int                # deprecated; retained for schema compatibility
 
     # Set by N7
     final_geojson: dict               # FeatureCollection for Mapbox rendering
@@ -246,16 +247,29 @@ Do not hardcode known restricted places inside prompts or Python node constants.
 
 ### Human-in-the-loop interrupt
 
-**Type:** LangGraph `interrupt_before` on N4
+**Type:** LangGraph `interrupt_before` on N4 — fires on initial destination selection and again after N5 rejects a destination.
 
-Before N4 runs, pause execution and surface to the Streamlit UI:
+**Initial interrupt (first run, `route_attempt_count == 0`):**
+
+Before N4 runs, pause and surface to the Streamlit UI:
 - The destination name, distance, travel time, and a one-sentence description
 - Two buttons: **"Yes, plan this!"** and **"Show me another"**
 
-If **"Show me another"**: increment `presented_candidate_index` and show the next item from `validated_candidates`. Do not add user rejections to `validation_failures`.
-If **"Yes, plan this!"**: set `user_confirmed = True`, keep that destination as the chosen destination, proceed to N4, and hide the validation choice buttons for that trip.
+If **"Show me another"**: advance `presented_candidate_index`, show the next item from `validated_candidates`. Do not add user rejections to `validation_failures`.
+If **"Yes, plan this!"**: set `user_confirmed = True`, proceed to N4.
 
-In Streamlit, implement this using `st.session_state` and the LangGraph checkpoint/resume pattern.
+**Re-interrupt after N5 rejection (`route_attempt_count > 0`):**
+
+N5 removes the bad destination from `validated_candidates`, resets `user_confirmed = False`, and routes back to N4. Because `interrupt_before=["n4_route"]` is always active, the graph pauses again before N4 can run. The Streamlit UI detects `route_attempt_count > 0` and shows a different prompt:
+- An explanation: *"That destination couldn't be fully planned — here are the remaining options."*
+- The updated, filtered `validated_candidates` list (rejected destination already removed)
+- The same **"Yes, plan this!"** / **"Show me another"** buttons, now operating on the filtered list
+
+The rejected destination is never shown again. The user makes an explicit new choice before N4 runs. N5 never silently switches the destination.
+
+If `validated_candidates` is empty when N5 tries to route back, the graph terminates and shows a graceful failure: *"Couldn't build a workable plan for any nearby destination — try again with different preferences."*
+
+In Streamlit, implement this using `st.session_state` and the LangGraph checkpoint/resume pattern. Use `state["route_attempt_count"] > 0` to distinguish the re-interrupt UI from the initial one.
 
 ---
 
@@ -287,11 +301,60 @@ Food guidance can be one of: `eat_at_destination`, `destination_options`, `route
 
 ---
 
-### N5 — Itinerary composer
+### N5 — Structured output validator
 
-**Type:** LLM-only node, no tool calls
+**Type:** Python + LLM node
 
-**Responsibility:** Write the human-readable itinerary. This node receives all verified facts from state and generates prose. It must only reference place names, times, and distances that exist in `state["timeline"]` and `state["route"]`. It must not invent any facts.
+**Responsibility:** Validate N4's structured output before prose is written. Guarantees the itinerary composer receives internally consistent, complete data. Runs two sequential passes: a rule-based Python structural pass, then an LLM semantic pass.
+
+**Python checks (run first, in order, stop accumulating on error):**
+1. **Timeline completeness** — every entry has non-empty `time`, `label`, `coords`, `type`, `notes`.
+2. **Timeline ordering** — entries are in chronological order by `time`.
+3. **Time arithmetic** — departure ≤ arrival at destination ≤ departure from destination ≤ return arrival.
+4. **Route shape** — `route["geojson"]["geometry"]["coordinates"]` is a list with at least 2 points.
+5. **Food coverage** — if constraints contain an explicit meal keyword, that meal appears in `food_availability`.
+6. **Coords validity** — all `coords` dicts have `lat` in `[-90, 90]` and `lng` in `[-180, 180]`.
+
+**LLM semantic pass (runs after Python checks):**
+- Receives a structured summary of N4 output: timeline, food_availability, destination type, constraints.
+- Checks for semantic inconsistencies that Python cannot catch: implausibly short or long dwell time at destination; a remote early-morning destination with no food guidance; food availability entries that contradict the destination type.
+- Uses structured output to return a list: `[{"field": ..., "issue": ..., "severity": "warning" | "error"}]`.
+
+**Routing logic (conditional edge out of N5):**
+
+| Outcome | Condition | Action |
+|---|---|---|
+| `error` — candidates remain | `claim_failures` contains severity `"error"` AND `validated_candidates` is non-empty after removing the bad destination | Remove the rejected destination from `validated_candidates`. Reset `presented_candidate_index` to 0 and `validated_destination` to the first remaining candidate. Set `user_confirmed = False`. Increment `route_attempt_count`. Route to **N4** — `interrupt_before` fires again and the user picks from the filtered list. |
+| `error` — no candidates remain | `claim_failures` contains severity `"error"` AND `validated_candidates` is now empty | Route to END with a graceful message: *"Couldn't build a workable plan for any nearby destination — try again with different preferences."* |
+| `warning` only | No `"error"` entries; `"warning"` entries present | Fix minor issues in state directly where possible (re-order timeline, fill a missing field from available data). Pass remaining warnings in `claim_failures` to N6 as context. Route to **N6**. |
+| Clean | `claim_failures` is empty | Route to **N6**. |
+
+N5 never silently presents an error-flagged plan to N6 and never silently switches the destination. The re-interrupt is the mechanism that keeps the user in control of every destination change.
+
+**Output:** `claim_failures` list; on error path additionally: `validated_candidates` (bad destination removed), `presented_candidate_index` reset to 0, `validated_destination` updated to first remaining, `user_confirmed` set to `False`, `route_attempt_count` incremented.
+
+---
+
+### N6 — Itinerary composer
+
+**Type:** LLM-only node, structured output
+
+**Responsibility:** Write the human-readable itinerary from N5-validated state. Uses a single structured LLM call that both composes prose and self-audits every factual claim in the same pass. No separate prose-validator node; no rewrite loop.
+
+**Structured output schema the LLM must return:**
+```json
+{
+  "prose": "string — the full itinerary text",
+  "claim_audit": [
+    {"claim": "string", "source_field": "string", "verified": true}
+  ]
+}
+```
+
+**Process:**
+1. Pass all N5-validated state to the LLM: `timeline`, `route`, `validated_destination`, `food_stops`, `food_availability`, and any `claim_failures` from N5.
+2. The LLM composes prose and for every factual statement (place name, time, distance, food stop name) records the source state field and whether the value was found there.
+3. Post-process: any claim with `verified: false` is stripped or rewritten to remove the unverifiable detail before writing `itinerary_draft`. The N5 `claim_failures` list is not modified.
 
 **System prompt for this node (include verbatim):**
 ```
@@ -300,26 +363,11 @@ based ONLY on the structured data provided. Do not invent any place names, trave
 distances, or facts not present in the input data. Use Malayalam words occasionally for 
 warmth (e.g., "njan paranjaal" / "as I'd say", "kidu trip aakum!" / "it'll be a great trip!"). 
 Format: a flowing paragraph per section (morning, journey, destination, return), not bullet points.
+After writing the prose, list every factual claim with its source field from the input data and 
+whether it is verified (true/false). Return the result as the structured JSON schema given.
 ```
 
-**Output:** `itinerary_draft` string
-
----
-
-### N6 — Claim validator
-
-**Type:** Tool-calling + LLM node
-
-**Responsibility:** Read `itinerary_draft` and verify every specific factual claim in it against the state. This is the hallucination guard.
-
-**Process:**
-1. LLM pass: extract all verifiable claims from the draft as a list — place names, travel times, opening status, distances, food stop names
-2. For each claim, check against `state["route"]`, `state["timeline"]`, `state["validated_destination"]`, `state["food_stops"]`, `state["food_availability"]`
-3. Flag any claim that does not match the verified state data
-4. If failures > 0: add to `claim_failures`, increment `rewrite_count`, route back to N5 with `claim_failures` appended to the N5 prompt as "do not include these: ..."
-5. Max 3 rewrites (`rewrite_count >= 3`): skip to N7 with a warning note in the final output
-
-**Output:** `claim_failures` list, or routes to N7 if clean
+**Output:** `itinerary_draft` string (only verified claims retained)
 
 ---
 
