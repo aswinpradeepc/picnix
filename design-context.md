@@ -431,8 +431,8 @@ picnix/
 │       ├── n2_isochrone.py
 │       ├── n3_validator.py
 │       ├── n4_route.py
-│       ├── n5_composer.py
-│       ├── n6_claim_guard.py
+│       ├── n5_validator.py
+│       ├── n6_composer.py
 │       └── n7_formatter.py
 ├── tools/
 │   ├── __init__.py

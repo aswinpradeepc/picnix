@@ -10,6 +10,7 @@ from graph.nodes.n1_intent import collect_intent
 from graph.nodes.n2_isochrone import fetch_isochrone_candidates, route_trip_type
 from graph.nodes.n3_validator import validate_destination
 from graph.nodes.n4_route import build_route
+from graph.nodes.n5_validator import validate_structured_output
 from graph.state import TripState
 
 
@@ -134,6 +135,14 @@ def run_route_builder(
     return apply_updates(state, builder(state))
 
 
+def run_structured_validator(
+    state: TripState,
+    *,
+    validator: Callable[[TripState], dict[str, Any]] = validate_structured_output,
+) -> TripState:
+    return apply_updates(state, validator(state))
+
+
 def request_next_candidate(
     state: TripState,
     *,
@@ -174,6 +183,16 @@ def _validation_result(state: TripState) -> str:
     return END
 
 
+def _structured_validation_result(state: TripState) -> str:
+    has_error = any(
+        failure.get("severity") == "error"
+        for failure in state.get("claim_failures", [])
+    )
+    if has_error and state.get("validated_candidates"):
+        return "n4_route"
+    return END
+
+
 def future_multiday_node(state: TripState) -> dict[str, Any]:
     return {
         "final_itinerary": (
@@ -188,6 +207,7 @@ def build_graph():
     workflow.add_node("n2_isochrone", fetch_isochrone_candidates)
     workflow.add_node("n3_validator", validate_destination)
     workflow.add_node("n4_route", build_route)
+    workflow.add_node("n5_validator", validate_structured_output)
     workflow.add_node("future_multiday", future_multiday_node)
 
     workflow.add_edge(START, "n1_intent")
@@ -210,7 +230,15 @@ def build_graph():
             END: END,
         },
     )
-    workflow.add_edge("n4_route", END)
+    workflow.add_edge("n4_route", "n5_validator")
+    workflow.add_conditional_edges(
+        "n5_validator",
+        _structured_validation_result,
+        {
+            "n4_route": "n4_route",
+            END: END,
+        },
+    )
     workflow.add_edge("future_multiday", END)
 
     return workflow.compile(checkpointer=MemorySaver(), interrupt_before=["n4_route"])

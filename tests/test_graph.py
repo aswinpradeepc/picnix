@@ -1,4 +1,5 @@
 from graph.graph import (
+    _structured_validation_result,
     apply_updates,
     build_graph,
     initial_trip_state,
@@ -6,6 +7,7 @@ from graph.graph import (
     run_candidate_discovery,
     run_intent_turn,
     run_route_builder,
+    run_structured_validator,
     validate_until_destination,
 )
 
@@ -165,6 +167,71 @@ def test_run_route_builder_applies_route_node_update() -> None:
 
     assert result["route"] == {"total_distance_meters": 1000}
     assert result["timeline"] == [{"time": "07:00", "label": "Depart"}]
+
+
+def test_run_structured_validator_applies_n5_update() -> None:
+    state = initial_trip_state()
+    state["route"] = {"total_distance_meters": 1000}
+
+    def fake_validator(next_state):
+        assert next_state["route"] == {"total_distance_meters": 1000}
+        return {
+            "claim_failures": [
+                {
+                    "field": "timeline",
+                    "issue": "Destination dwell time is short.",
+                    "severity": "warning",
+                }
+            ]
+        }
+
+    result = run_structured_validator(state, validator=fake_validator)
+
+    assert result["claim_failures"] == [
+        {
+            "field": "timeline",
+            "issue": "Destination dwell time is short.",
+            "severity": "warning",
+        }
+    ]
+
+
+def test_structured_validation_result_routes_error_with_candidates_back_to_n4() -> None:
+    state = initial_trip_state()
+    state["claim_failures"] = [
+        {
+            "field": "timeline",
+            "issue": "Destination dwell time is implausibly short.",
+            "severity": "error",
+        }
+    ]
+    state["validated_candidates"] = [{"place_id": "next"}]
+
+    assert _structured_validation_result(state) == "n4_route"
+
+
+def test_structured_validation_result_ends_for_clean_warning_or_no_candidates() -> None:
+    clean_state = initial_trip_state()
+    warning_state = initial_trip_state()
+    warning_state["claim_failures"] = [
+        {
+            "field": "timeline",
+            "issue": "Minor warning.",
+            "severity": "warning",
+        }
+    ]
+    exhausted_state = initial_trip_state()
+    exhausted_state["claim_failures"] = [
+        {
+            "field": "timeline",
+            "issue": "No valid route.",
+            "severity": "error",
+        }
+    ]
+
+    assert _structured_validation_result(clean_state) == "__end__"
+    assert _structured_validation_result(warning_state) == "__end__"
+    assert _structured_validation_result(exhausted_state) == "__end__"
 
 
 def test_build_graph_compiles_with_checkpointer() -> None:
