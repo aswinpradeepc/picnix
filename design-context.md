@@ -133,6 +133,7 @@ class TripState(TypedDict):
     food_stops: list[dict]            # validated food stops along route
     food_availability: list[dict]     # meal decisions: eat at destination, route options,
                                       # eat at home, or carry/parcel guidance
+    timeline: list[dict]              # [{time, label, coords, type, notes}] ordered trip timeline
 
     # Set by N6
     itinerary_draft: str              # human-readable prose itinerary with inline self-check
@@ -145,7 +146,6 @@ class TripState(TypedDict):
     # Set by N7
     final_geojson: dict               # FeatureCollection for Mapbox rendering
     final_itinerary: str              # final validated prose
-    timeline: list[dict]              # [{time, label, coords, type, notes}]
 ```
 
 ---
@@ -397,7 +397,7 @@ final_geojson = {
 }
 ```
 
-Copy `itinerary_draft` to `final_itinerary`. Build `timeline` list. This is the node that Streamlit reads from.
+Reads `route` and `timeline` from state (both written by N4) to produce the GeoJSON features. Copies `itinerary_draft` (written by N6) to `final_itinerary`. This is the node that Streamlit reads from.
 
 ---
 
