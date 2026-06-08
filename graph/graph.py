@@ -6,6 +6,7 @@ from typing import Any
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.graph import END, START, StateGraph
 
+from config.settings import SETTINGS
 from graph.nodes.n1_intent import collect_intent
 from graph.nodes.n2_isochrone import fetch_isochrone_candidates, route_trip_type
 from graph.nodes.n3_validator import validate_destination
@@ -267,3 +268,8 @@ def build_graph():
     workflow.add_edge("future_multiday", END)
 
     return workflow.compile(checkpointer=MemorySaver(), interrupt_before=["n4_route"])
+
+
+if SETTINGS.debug:
+    from tools.graph_viz import export_graph_diagram
+    export_graph_diagram()

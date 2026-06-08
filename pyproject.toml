@@ -12,6 +12,11 @@ dependencies = [
     "streamlit>=1.58.0",
 ]
 
+[project.optional-dependencies]
+viz = [
+    "pygraphviz",  # requires graphviz system library (apt install graphviz libgraphviz-dev)
+]
+
 [dependency-groups]
 dev = [
     "pytest>=9.0.3",
