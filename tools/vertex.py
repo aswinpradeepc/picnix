@@ -6,6 +6,7 @@ from config.settings import SETTINGS, Settings
 
 
 DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
+REASONING_GEMINI_MODEL = "gemini-2.5-pro"
 
 
 class VertexConfigurationError(RuntimeError):

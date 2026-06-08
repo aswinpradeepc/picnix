@@ -11,7 +11,7 @@ from config.settings import SETTINGS, Settings
 from graph.nodes.time_utils import trip_start_from_constraints
 from graph.state import TripState
 from tools import gmaps
-from tools.vertex import get_chat_model
+from tools.vertex import REASONING_GEMINI_MODEL, get_chat_model
 
 
 EARTH_RADIUS_KM = 6371.0088
@@ -803,7 +803,7 @@ def build_route(
     total_travel_seconds = outbound_seconds + inbound_seconds
     trip_end = departure + timedelta(hours=duration_hours)
 
-    chat_model = model or get_chat_model(temperature=0.1, response_mime_type="application/json")
+    chat_model = model or get_chat_model(model=REASONING_GEMINI_MODEL, temperature=1.0, response_mime_type="application/json")
     destination_seconds, dwell_reason = _llm_dwell_seconds(
         destination=destination,
         constraints=constraints,

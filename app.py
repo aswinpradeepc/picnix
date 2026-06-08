@@ -164,6 +164,21 @@ def render_chat() -> None:
             st.markdown(message["content"])
 
 
+def render_clarification_options(state: dict) -> None:
+    clarification = state.get("clarification_prompt", {})
+    if not clarification or state.get("constraints"):
+        return
+    options = clarification.get("options", [])
+    if not options:
+        return
+
+    with st.form("clarification_form", clear_on_submit=True):
+        selected = st.radio("Quick options:", options, index=None)
+        if st.form_submit_button("Select", use_container_width=True) and selected:
+            handle_user_message(selected)
+            st.rerun()
+
+
 def handle_user_message(user_message: str) -> None:
     with st.spinner("Thinking through the trip constraints..."):
         st.session_state.graph_state = run_intent_turn(
@@ -315,6 +330,7 @@ def main() -> None:
     with left:
         st.title("Picnix")
         render_chat()
+        render_clarification_options(st.session_state.graph_state)
         if user_message := st.chat_input("Tell me your trip mood, starting point, time, and vehicle"):
             handle_user_message(user_message)
             st.rerun()

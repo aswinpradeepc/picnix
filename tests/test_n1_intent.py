@@ -28,6 +28,7 @@ def test_intent_node_returns_opening_message_without_model_call() -> None:
     assert result == {
         "raw_messages": [{"role": "assistant", "content": OPENING_MESSAGE}],
         "clarification_round": 0,
+        "clarification_prompt": {},
     }
     assert model.invocations == []
 
@@ -214,7 +215,9 @@ def test_intent_node_configures_model_for_json_mode(monkeypatch) -> None:
         },
     )
 
-    assert captured_kwargs["temperature"] == 0.1
+    from tools.vertex import REASONING_GEMINI_MODEL
+    assert captured_kwargs["model"] == REASONING_GEMINI_MODEL
+    assert captured_kwargs["temperature"] == 1.0
     assert captured_kwargs["response_mime_type"] == "application/json"
 
 
@@ -286,3 +289,106 @@ def test_intent_node_makes_reasonable_duration_guess_when_model_omits_it() -> No
     )
 
     assert result["constraints"]["duration_hours"] == 4.0
+
+
+def test_intent_node_includes_clarification_prompt_when_asking_question() -> None:
+    from graph.nodes.n1_intent import collect_intent
+
+    model = FakeModel(
+        {
+            "assistant_message": "What kind of trip are you in the mood for?",
+            "done": False,
+            "asked_question": True,
+            "clarification_prompt": {
+                "question": "What kind of trip are you in the mood for?",
+                "options": ["nature", "beach", "food", "culture"],
+                "allow_custom": True,
+            },
+            "constraints": None,
+        }
+    )
+
+    result = collect_intent(
+        {
+            "raw_messages": [{"role": "user", "content": "I want to go somewhere nice"}],
+            "clarification_round": 0,
+        },
+        model=model,
+    )
+
+    assert result["clarification_prompt"] == {
+        "question": "What kind of trip are you in the mood for?",
+        "options": ["nature", "beach", "food", "culture"],
+        "allow_custom": True,
+    }
+    assert "constraints" not in result
+
+
+def test_intent_node_clears_clarification_prompt_when_done() -> None:
+    from graph.nodes.n1_intent import collect_intent
+
+    model = FakeModel(
+        {
+            "assistant_message": "Set. I have everything I need.",
+            "done": True,
+            "asked_question": False,
+            "clarification_prompt": {
+                "question": "Leftover question?",
+                "options": ["a", "b"],
+                "allow_custom": True,
+            },
+            "constraints": {
+                "start_location": "Kochi",
+                "departure_time": "09:00",
+                "duration_hours": 8,
+                "group_size": 2,
+                "vehicle": "car",
+                "interests": ["food"],
+                "budget_feel": "medium",
+            },
+        }
+    )
+
+    result = collect_intent(
+        {
+            "raw_messages": [{"role": "user", "content": "Kochi, 8 hours, car, food"}],
+            "clarification_round": 1,
+        },
+        model=model,
+    )
+
+    assert result["clarification_prompt"] == {}
+    assert result["constraints"]["start_location"] == "Kochi"
+
+
+def test_intent_node_returns_empty_clarification_prompt_when_payload_omits_it() -> None:
+    from graph.nodes.n1_intent import collect_intent
+
+    model = FakeModel(
+        {
+            "assistant_message": "Where are you starting from?",
+            "done": False,
+            "asked_question": True,
+            "constraints": None,
+        }
+    )
+
+    result = collect_intent(
+        {
+            "raw_messages": [{"role": "user", "content": "I want to go out"}],
+            "clarification_round": 0,
+        },
+        model=model,
+    )
+
+    assert result["clarification_prompt"] == {}
+
+
+def test_intent_node_uses_interest_keys_from_n2_interest_type_map() -> None:
+    from graph.nodes.n1_intent import _INTEREST_KEYS, _build_system_prompt
+    from graph.nodes.n2_isochrone import INTEREST_TYPE_MAP
+
+    assert set(_INTEREST_KEYS) == set(INTEREST_TYPE_MAP.keys())
+    prompt = _build_system_prompt(0)
+    for key in INTEREST_TYPE_MAP:
+        assert key in prompt

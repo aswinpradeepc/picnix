@@ -1,6 +1,6 @@
 # Picnix Project Status
 
-Last updated: 2026-06-06 (fix session — N6 response schema enforcement)
+Last updated: 2026-06-08 (CS3 complete: N1 clarification prompt; model upgrade to gemini-2.5-pro for N1/N4/N5)
 
 ## Source Of Truth
 
@@ -22,12 +22,16 @@ Last updated: 2026-06-06 (fix session — N6 response schema enforcement)
 - N1 intent collection with Gemini through `ChatGoogleGenerativeAI` using Vertex AI ADC.
 - N2 short-trip candidate discovery with Google Geocoding and Places Nearby Search.
 - N3 destination validation with Places Details, opening-hours checks, markdown-backed known issue checks, and Routes travel-time checks.
-- N4 route builder with round-trip Routes calls, first-class dynamic food availability decisions, destination dwell-time caps, and departure-time-based timeline construction.
+- N4 route builder with round-trip Routes calls, first-class dynamic food availability decisions, LLM-driven per-destination dwell time (20 min floor, math ceiling, reason in timeline notes), and departure-time-based timeline construction. (CS2)
 - N5 structured output validator with Python structural checks, Gemini semantic validation, claim failure state, and N5 error re-prompt state updates.
 - N6 itinerary composer with one schema-constrained structured Gemini call, inline claim audit, and unverified-claim stripping before writing `itinerary_draft`.
 - N7 GeoJSON formatter that builds `final_geojson` from route/timeline and copies `itinerary_draft` to `final_itinerary`.
 - LangGraph wiring now runs `n4_route → n5_validator → n6_composer → n7_formatter → END`; N5 errors with remaining candidates route back to `n4_route` so the existing `interrupt_before` can re-prompt.
 - Streamlit demo for chat, validated destination selection, N5 re-prompt messaging, N4 route/timeline/food preview, N6 final itinerary text, and N7 Mapbox/pydeck route rendering.
+- `agents.md` created at project root as the shared north star for all agents working on this project. (CS0)
+- Graph viz utility at `tools/graph_viz.py` exports `docs/graph.mmd` (and `docs/graph.png` if pygraphviz is installed) when `DEBUG=true`. (CS1)
+- N1 now emits `clarification_prompt: {question, options, allow_custom}` alongside each assistant message; Streamlit renders radio buttons with free-text fallback; options sourced from `INTEREST_TYPE_MAP` keys in N2. (CS3)
+- N1, N4 (dwell time call), and N5 (semantic validation pass) upgraded to `gemini-2.5-pro` with `temperature=1.0`; N6 remains on `gemini-2.5-flash`. Requires `GOOGLE_CLOUD_LOCATION=us-central1` (Pro not available in `asia-south1`).
 
 ## Current Fixed Limits
 
@@ -46,10 +50,14 @@ Last updated: 2026-06-06 (fix session — N6 response schema enforcement)
 
 ## Designed But Not Yet Implemented
 
-The original strict AI-layer node path is now implemented through N7. Remaining work is UI/ops polish, not new graph nodes.
+N1–N7 graph nodes and Streamlit demo are complete. Remaining change sets are feature improvements and new graph nodes.
 
-- Replace the Streamlit helper-based demo flow with direct compiled LangGraph checkpoint/resume usage if stricter parity with `interrupt_before` behavior is needed.
-- Improve Mapbox marker styling/layers once real demo feedback is available.
+- **CS3 ✓ done** — N1 emits `clarification_prompt` dict; Streamlit renders radio buttons + free-text fallback. **Known issue: clarification question options need review** — N1 prompts for free-form fields (start_location, departure_time, group_size) may return empty `options`, hiding the radio buttons even though a question is asked. Options generation for non-enum fields should be improved.
+- **CS4** — Multi-destination selection (1–3 stops); `selected_destinations` list replaces `validated_destination`; N4 chains stops into one route.
+- **CS5** — N8 plan editor: natural-language edits after itinerary is shown, routes back to N4.
+- **CS6** — Google Maps deep-link export after N7.
+- **CS7** — Bulleted itinerary format in N6.
+- **CS8** — Region-agnostic: remove Kerala/India-specific strings from code and prompts.
 - Future-scope items from `design-context.md` remain out of scope: FastAPI, auth, persistence, observability, production frontend, and multi-day planning.
 
 ## Latest Checkpoint
@@ -58,3 +66,5 @@ The original strict AI-layer node path is now implemented through N7. Remaining 
 - `docs/superpowers/checkpoints/2026-06-06-n5-structured-validator.md` — N5 structured output validator implementation, graph wiring, tests, and remaining N6/N7/UI work.
 - `docs/superpowers/checkpoints/2026-06-06-n6-n7-streamlit-demo.md` — N6/N7 implementation, full graph wiring through final output, Streamlit demo updates, and test/server verification.
 - `docs/superpowers/checkpoints/2026-06-06-n6-response-schema-fix.md` — N6 live crash fix for `N6 response missing prose`, Gemini response schema enforcement, alias normalization, and regression tests.
+- CS0+CS1: `agents.md` north star + graph viz utility (commit `3e08f9d`, 2026-06-08).
+- CS2: LLM-driven dwell time in N4 — single Gemini call, 20 min floor, math ceiling, reason in timeline notes (commit `3f30804`, 2026-06-08).

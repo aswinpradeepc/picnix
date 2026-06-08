@@ -130,3 +130,5 @@ Node responsibilities at a glance:
 | 2026-06-08 | CS1 | Graph viz utility: tools/graph_viz.py exports docs/graph.mmd (and docs/graph.png if pygraphviz installed) when DEBUG=true |
 | 2026-06-08 | CS2 | LLM-driven dwell time in N4: single Gemini call determines dwell_minutes with 20 min floor and math ceiling; reason written to timeline notes; static lookup removed |
 | 2026-06-08 | CS2 | LLM-driven dwell time in N4: single Gemini call per run determines dwell_minutes with 20 min floor and math ceiling; reason written to timeline notes; static lookup kept as silent fallback |
+| 2026-06-08 | CS3 | N1 emits clarification_prompt dict when asking questions; Streamlit renders radio buttons + free-text fallback; options sourced from INTEREST_TYPE_MAP keys in N2 |
+| 2026-06-08 | model | N1, N4 dwell time, N5 semantic pass upgraded to gemini-2.5-pro (temperature=1.0); N6 stays on gemini-2.5-flash; REASONING_GEMINI_MODEL constant in tools/vertex.py; requires us-central1 |

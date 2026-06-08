@@ -6,7 +6,7 @@ from typing import Any
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from graph.state import TripState
-from tools.vertex import get_chat_model
+from tools.vertex import REASONING_GEMINI_MODEL, get_chat_model
 
 
 GRACEFUL_FAILURE_MESSAGE = (
@@ -422,7 +422,8 @@ def _run_semantic_pass(
     model: Any | None,
 ) -> list[dict[str, str]]:
     chat_model = model or get_chat_model(
-        temperature=0.1,
+        model=REASONING_GEMINI_MODEL,
+        temperature=1.0,
         response_mime_type="application/json",
     )
     messages = [

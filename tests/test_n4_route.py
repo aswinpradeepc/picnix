@@ -95,6 +95,25 @@ def base_state(*, vehicle: str = "car", duration_hours: float = 6) -> dict:
     }
 
 
+class FakeLLM:
+    """Returns a fixed dwell_minutes value so N4 tests are deterministic and don't call the real API."""
+
+    def __init__(self, dwell_minutes: int = 120) -> None:
+        self.dwell_minutes = dwell_minutes
+
+    def invoke(self, messages):
+        import json
+
+        class _Resp:
+            pass
+
+        resp = _Resp()
+        resp.content = json.dumps(
+            [{"place_id": "dest-1", "dwell_minutes": self.dwell_minutes, "reason": "test"}]
+        )
+        return resp
+
+
 def food_candidate(place_id: str = "food-1") -> dict:
     return {
         "place_id": place_id,
@@ -113,6 +132,7 @@ def test_build_route_creates_round_trip_route_without_food_requirement() -> None
         base_state(duration_hours=6),
         gmaps_client=fake_gmaps,
         trip_start=datetime(2026, 5, 31, 7, 0),
+        model=FakeLLM(),
     )
 
     assert fake_gmaps.route_calls == [
@@ -163,6 +183,7 @@ def test_explicit_dinner_uses_dynamic_route_segment_food_search() -> None:
         state,
         gmaps_client=fake_gmaps,
         trip_start=datetime(2026, 5, 31, 15, 0),
+        model=FakeLLM(),
     )
 
     assert fake_gmaps.food_search_calls == [
@@ -210,6 +231,7 @@ def test_food_oriented_destination_satisfies_explicit_dinner_without_extra_stop(
         state,
         gmaps_client=fake_gmaps,
         trip_start=datetime(2026, 5, 31, 17, 0),
+        model=FakeLLM(),
     )
 
     assert fake_gmaps.food_search_calls == []
@@ -238,6 +260,7 @@ def test_dinner_window_without_explicit_food_need_can_be_eat_at_home() -> None:
         state,
         gmaps_client=fake_gmaps,
         trip_start=datetime(2026, 5, 31, 15, 0),
+        model=FakeLLM(),
     )
 
     assert fake_gmaps.food_search_calls == []
@@ -258,6 +281,7 @@ def test_remote_morning_destination_without_food_options_gets_carry_or_parcel_gu
         state,
         gmaps_client=fake_gmaps,
         trip_start=datetime(2026, 5, 31, 6, 0),
+        model=FakeLLM(),
     )
 
     assert fake_gmaps.food_search_calls
@@ -272,7 +296,7 @@ def test_build_route_uses_departure_time_from_constraints() -> None:
     state = base_state(duration_hours=6)
     state["constraints"]["departure_time"] = "09:30"
 
-    result = build_route(state, gmaps_client=fake_gmaps)
+    result = build_route(state, gmaps_client=fake_gmaps, model=FakeLLM())
 
     assert [entry["time"] for entry in result["timeline"]] == [
         "09:30",
@@ -289,6 +313,7 @@ def test_build_route_uses_two_wheeler_mode_for_bike_trips() -> None:
         base_state(vehicle="bike"),
         gmaps_client=fake_gmaps,
         trip_start=datetime(2026, 5, 31, 7, 0),
+        model=FakeLLM(),
     )
 
     assert [call["travel_mode"] for call in fake_gmaps.route_calls] == [

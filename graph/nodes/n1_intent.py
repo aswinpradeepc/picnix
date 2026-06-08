@@ -7,7 +7,8 @@ from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, System
 
 from graph.state import TripState
 from graph.nodes.time_utils import normalize_departure_time
-from tools.vertex import get_chat_model
+from graph.nodes.n2_isochrone import INTEREST_TYPE_MAP
+from tools.vertex import REASONING_GEMINI_MODEL, get_chat_model
 
 
 OPENING_MESSAGE = (
@@ -15,9 +16,14 @@ OPENING_MESSAGE = (
     "Tell me - where are you starting from, how much time do you have, and when do you want to leave?"
 )
 
-SYSTEM_PROMPT = """You are N1, the Picnix intent collector.
+_INTEREST_KEYS = sorted(INTEREST_TYPE_MAP.keys())
 
-Persona: warm, brief, enthusiastic Kerala local trip-planning friend.
+
+def _build_system_prompt(clarification_round: int) -> str:
+    interest_list = ", ".join(_INTEREST_KEYS)
+    return f"""You are N1, the Picnix intent collector.
+
+Persona: warm, brief, enthusiastic trip-planning friend.
 
 Collect these constraints:
 - start_location: text
@@ -25,7 +31,7 @@ Collect these constraints:
 - duration_hours: float
 - group_size: int
 - vehicle: one of bike, car, public, none
-- interests: list of strings
+- interests: list — valid values: {interest_list}
 - budget_feel: one of free, low, medium, splurge
 
 Rules:
@@ -35,11 +41,33 @@ Rules:
 - If departure_time is missing, ask for it naturally with the other constraints unless clarification_round is already 3.
 - If the user is vague and clarification_round is already 3, make reasonable assumptions from the trip mood and state them.
 - When enough information is gathered, set done=true and return all constraints.
-- Return only valid JSON with this shape:
+
+When asking a question, always include clarification_prompt with structured options so the UI can render radio buttons.
+- For interests questions, options must be from: {interest_list}
+- For vehicle questions, options are: bike, car, public, none
+- For budget_feel questions, options are: free, low, medium, splurge
+- For free-form fields (start_location, group_size, departure_time), options may be empty.
+- Always set allow_custom: true.
+
+Return only valid JSON. When asking a question:
+{{
+  "assistant_message": "message to show the user",
+  "done": false,
+  "asked_question": true,
+  "clarification_prompt": {{
+    "question": "the question you are asking",
+    "options": ["option1", "option2"],
+    "allow_custom": true
+  }},
+  "constraints": null
+}}
+
+When done (all constraints collected):
 {{
   "assistant_message": "message to show the user",
   "done": true,
   "asked_question": false,
+  "clarification_prompt": null,
   "constraints": {{
     "start_location": "...",
     "departure_time": "09:00",
@@ -177,8 +205,23 @@ def _normalize_duration_hours(value: Any, interests: list[str]) -> float:
     return 6.0
 
 
+def _extract_clarification_prompt(payload: dict[str, Any]) -> dict:
+    raw = payload.get("clarification_prompt")
+    if not isinstance(raw, dict):
+        return {}
+    question = str(raw.get("question", "")).strip()
+    options = [str(o).strip() for o in raw.get("options", []) if str(o).strip()]
+    if not question or not options:
+        return {}
+    return {
+        "question": question,
+        "options": options,
+        "allow_custom": bool(raw.get("allow_custom", True)),
+    }
+
+
 def collect_intent(state: TripState, *, model: Any | None = None) -> dict[str, Any]:
-    """Read `raw_messages` and `clarification_round`, then write updated chat history and constraints when N1 has enough information."""
+    """Read `raw_messages` and `clarification_round`, then write updated chat history, clarification_prompt, and constraints when N1 has enough information."""
     raw_messages = list(state.get("raw_messages", []))
     clarification_round = int(state.get("clarification_round", 0))
 
@@ -186,14 +229,16 @@ def collect_intent(state: TripState, *, model: Any | None = None) -> dict[str, A
         return {
             "raw_messages": [{"role": "assistant", "content": OPENING_MESSAGE}],
             "clarification_round": clarification_round,
+            "clarification_prompt": {},
         }
 
     chat_model = model or get_chat_model(
-        temperature=0.1,
+        model=REASONING_GEMINI_MODEL,
+        temperature=1.0,
         response_mime_type="application/json",
     )
     messages = [
-        SystemMessage(content=SYSTEM_PROMPT.format(clarification_round=clarification_round)),
+        SystemMessage(content=_build_system_prompt(clarification_round)),
         *[_message_from_dict(message) for message in raw_messages],
     ]
     response = chat_model.invoke(messages)
@@ -215,6 +260,7 @@ def collect_intent(state: TripState, *, model: Any | None = None) -> dict[str, A
             {"role": "assistant", "content": assistant_message},
         ],
         "clarification_round": next_round,
+        "clarification_prompt": {} if done else _extract_clarification_prompt(payload),
     }
     if done:
         result["constraints"] = _normalize_constraints(payload.get("constraints", {}))
