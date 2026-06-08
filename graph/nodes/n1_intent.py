@@ -42,20 +42,24 @@ Rules:
 - If the user is vague and clarification_round is already 3, make reasonable assumptions from the trip mood and state them.
 - When enough information is gathered, set done=true and return all constraints.
 
-When asking a question, always include clarification_prompt with structured options so the UI can render radio buttons.
-- For interests questions, options must be from: {interest_list}
-- For vehicle questions, options are: bike, car, public, none
-- For budget_feel questions, options are: free, low, medium, splurge
-- For free-form fields (start_location, group_size, departure_time), options may be empty.
+Ask exactly ONE question per round. Do not chain multiple questions into one message.
+The assistant_message must contain only that single question and must match clarification_prompt.question.
+
+When asking a question, always include clarification_prompt so the UI can render the right input control.
+Choose input_type for the question:
+- multi_select (the user may pick several): use for interests. options must be from: {interest_list}
+- single_select (exactly one answer): use for vehicle (bike, car, public, none) and budget_feel (free, low, medium, splurge)
+- text (free typing, no preset choices): use for start_location, group_size, departure_time. Leave options empty.
 - Always set allow_custom: true.
 
 Return only valid JSON. When asking a question:
 {{
-  "assistant_message": "message to show the user",
+  "assistant_message": "the single question you are asking",
   "done": false,
   "asked_question": true,
   "clarification_prompt": {{
-    "question": "the question you are asking",
+    "question": "the single question you are asking",
+    "input_type": "single_select",
     "options": ["option1", "option2"],
     "allow_custom": true
   }},
@@ -205,16 +209,30 @@ def _normalize_duration_hours(value: Any, interests: list[str]) -> float:
     return 6.0
 
 
+VALID_INPUT_TYPES = {"single_select", "multi_select", "text"}
+
+
 def _extract_clarification_prompt(payload: dict[str, Any]) -> dict:
     raw = payload.get("clarification_prompt")
     if not isinstance(raw, dict):
         return {}
     question = str(raw.get("question", "")).strip()
-    options = [str(o).strip() for o in raw.get("options", []) if str(o).strip()]
-    if not question or not options:
+    if not question:
         return {}
+
+    options = [str(o).strip() for o in raw.get("options", []) if str(o).strip()]
+    input_type = str(raw.get("input_type", "")).strip().lower()
+    if input_type not in VALID_INPUT_TYPES:
+        # Infer from options: choices imply a select, no choices implies free text.
+        input_type = "single_select" if options else "text"
+
+    # Select-type questions are meaningless without choices; fall back to text.
+    if input_type in {"single_select", "multi_select"} and not options:
+        input_type = "text"
+
     return {
         "question": question,
+        "input_type": input_type,
         "options": options,
         "allow_custom": bool(raw.get("allow_custom", True)),
     }

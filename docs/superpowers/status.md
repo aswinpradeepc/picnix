@@ -1,6 +1,6 @@
 # Picnix Project Status
 
-Last updated: 2026-06-08 (CS3 complete: N1 clarification prompt; model upgrade to gemini-2.5-pro for N1/N4/N5)
+Last updated: 2026-06-08 (CS3 + UX fix: typed clarification inputs and combined choice/free-text answers; model upgrade to gemini-2.5-pro for N1/N4/N5)
 
 ## Source Of Truth
 
@@ -30,7 +30,7 @@ Last updated: 2026-06-08 (CS3 complete: N1 clarification prompt; model upgrade t
 - Streamlit demo for chat, validated destination selection, N5 re-prompt messaging, N4 route/timeline/food preview, N6 final itinerary text, and N7 Mapbox/pydeck route rendering.
 - `agents.md` created at project root as the shared north star for all agents working on this project. (CS0)
 - Graph viz utility at `tools/graph_viz.py` exports `docs/graph.mmd` (and `docs/graph.png` if pygraphviz is installed) when `DEBUG=true`. (CS1)
-- N1 now emits `clarification_prompt: {question, options, allow_custom}` alongside each assistant message; Streamlit renders radio buttons with free-text fallback; options sourced from `INTEREST_TYPE_MAP` keys in N2. (CS3)
+- N1 now emits `clarification_prompt: {question, input_type, options, allow_custom}` alongside each assistant message; `input_type` is one of `single_select`/`multi_select`/`text`. N1 asks exactly one question per round (no chained prose). Streamlit renders checkboxes (multi-select), radio (single-select), or a text box (text) accordingly, and always offers a free-text box so the user can combine a choice with extra context — both are merged into one labeled answer. Options sourced from `INTEREST_TYPE_MAP` keys in N2. (CS3 + UX fix)
 - N1, N4 (dwell time call), and N5 (semantic validation pass) upgraded to `gemini-2.5-pro` with `temperature=1.0`; N6 remains on `gemini-2.5-flash`. Requires `GOOGLE_CLOUD_LOCATION=us-central1` (Pro not available in `asia-south1`).
 
 ## Current Fixed Limits
@@ -52,7 +52,7 @@ Last updated: 2026-06-08 (CS3 complete: N1 clarification prompt; model upgrade t
 
 N1–N7 graph nodes and Streamlit demo are complete. Remaining change sets are feature improvements and new graph nodes.
 
-- **CS3 ✓ done** — N1 emits `clarification_prompt` dict; Streamlit renders radio buttons + free-text fallback. **Known issue: clarification question options need review** — N1 prompts for free-form fields (start_location, departure_time, group_size) may return empty `options`, hiding the radio buttons even though a question is asked. Options generation for non-enum fields should be improved.
+- **CS3 ✓ done (+ UX fix)** — N1 emits a typed `clarification_prompt` dict; Streamlit renders the matching control (checkbox/radio/text) and merges a selected choice with optional free-text into one answer. The earlier known issue (free-form fields returned empty `options` and hid the input) is resolved: `text` input_type now renders a dedicated text box instead of being dropped.
 - **CS4** — Multi-destination selection (1–3 stops); `selected_destinations` list replaces `validated_destination`; N4 chains stops into one route.
 - **CS5** — N8 plan editor: natural-language edits after itinerary is shown, routes back to N4.
 - **CS6** — Google Maps deep-link export after N7.
@@ -68,3 +68,4 @@ N1–N7 graph nodes and Streamlit demo are complete. Remaining change sets are f
 - `docs/superpowers/checkpoints/2026-06-06-n6-response-schema-fix.md` — N6 live crash fix for `N6 response missing prose`, Gemini response schema enforcement, alias normalization, and regression tests.
 - CS0+CS1: `agents.md` north star + graph viz utility (commit `3e08f9d`, 2026-06-08).
 - CS2: LLM-driven dwell time in N4 — single Gemini call, 20 min floor, math ceiling, reason in timeline notes (commit `3f30804`, 2026-06-08).
+- CS3 UX fix: typed clarification inputs (single_select/multi_select/text), one question per round, combined choice + free-text answers (commit `43047c7`, 2026-06-08).

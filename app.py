@@ -164,19 +164,50 @@ def render_chat() -> None:
             st.markdown(message["content"])
 
 
+def _compose_clarification_answer(selected: list[str], custom: str) -> str:
+    """Merge picked options and free-text into one labeled answer for N1."""
+    custom = custom.strip()
+    parts: list[str] = []
+    if selected:
+        parts.append("Selected: " + ", ".join(selected) + ".")
+    if custom:
+        parts.append("Note: " + custom)
+    return " ".join(parts).strip()
+
+
 def render_clarification_options(state: dict) -> None:
     clarification = state.get("clarification_prompt", {})
     if not clarification or state.get("constraints"):
         return
+    question = clarification.get("question", "")
     options = clarification.get("options", [])
-    if not options:
-        return
+    input_type = clarification.get("input_type", "single_select" if options else "text")
+    allow_custom = clarification.get("allow_custom", True)
 
     with st.form("clarification_form", clear_on_submit=True):
-        selected = st.radio("Quick options:", options, index=None)
-        if st.form_submit_button("Select", use_container_width=True) and selected:
-            handle_user_message(selected)
-            st.rerun()
+        if question:
+            st.markdown(f"**{question}**")
+
+        selected: list[str] = []
+        if input_type == "multi_select":
+            for option in options:
+                if st.checkbox(option, key=f"clarify_opt_{option}"):
+                    selected.append(option)
+        elif input_type == "single_select":
+            choice = st.radio("Quick options:", options, index=None)
+            if choice:
+                selected.append(choice)
+
+        custom = ""
+        if allow_custom or input_type == "text":
+            label = "Your answer:" if input_type == "text" else "Add anything else (optional):"
+            custom = st.text_input(label)
+
+        if st.form_submit_button("Select", use_container_width=True):
+            answer = _compose_clarification_answer(selected, custom)
+            if answer:
+                handle_user_message(answer)
+                st.rerun()
 
 
 def handle_user_message(user_message: str) -> None:

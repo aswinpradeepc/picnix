@@ -301,6 +301,7 @@ def test_intent_node_includes_clarification_prompt_when_asking_question() -> Non
             "asked_question": True,
             "clarification_prompt": {
                 "question": "What kind of trip are you in the mood for?",
+                "input_type": "multi_select",
                 "options": ["nature", "beach", "food", "culture"],
                 "allow_custom": True,
             },
@@ -318,10 +319,45 @@ def test_intent_node_includes_clarification_prompt_when_asking_question() -> Non
 
     assert result["clarification_prompt"] == {
         "question": "What kind of trip are you in the mood for?",
+        "input_type": "multi_select",
         "options": ["nature", "beach", "food", "culture"],
         "allow_custom": True,
     }
     assert "constraints" not in result
+
+
+def test_intent_node_keeps_text_input_type_with_empty_options() -> None:
+    from graph.nodes.n1_intent import collect_intent
+
+    model = FakeModel(
+        {
+            "assistant_message": "Where are you starting from?",
+            "done": False,
+            "asked_question": True,
+            "clarification_prompt": {
+                "question": "Where are you starting from?",
+                "input_type": "text",
+                "options": [],
+                "allow_custom": True,
+            },
+            "constraints": None,
+        }
+    )
+
+    result = collect_intent(
+        {
+            "raw_messages": [{"role": "user", "content": "I want to go out"}],
+            "clarification_round": 0,
+        },
+        model=model,
+    )
+
+    assert result["clarification_prompt"] == {
+        "question": "Where are you starting from?",
+        "input_type": "text",
+        "options": [],
+        "allow_custom": True,
+    }
 
 
 def test_intent_node_clears_clarification_prompt_when_done() -> None:

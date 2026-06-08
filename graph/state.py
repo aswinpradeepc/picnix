@@ -5,7 +5,7 @@ class TripState(TypedDict):
     raw_messages: list[dict]          # Full conversation history collected by N1.
     constraints: dict                 # Structured trip constraints: start_location, duration_hours, group_size, vehicle, interests, budget_feel.
     clarification_round: int          # Number of clarification question rounds already used by N1.
-    clarification_prompt: dict        # Structured options for the current N1 question: {question, options, allow_custom}.
+    clarification_prompt: dict        # Structured options for the current N1 question: {question, input_type, options, allow_custom}. input_type is one of single_select, multi_select, text.
 
     isochrone_polygon: dict           # GeoJSON polygon representing the reachable area from the start location.
     candidates: list[dict]            # Top 20 raw candidate destinations with coordinates, tags, distance, and ranking metadata.
