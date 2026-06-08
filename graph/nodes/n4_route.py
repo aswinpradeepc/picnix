@@ -1,16 +1,21 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime, timedelta
 from math import asin, cos, radians, sin, sqrt
 from typing import Any
+
+from langchain_core.messages import HumanMessage, SystemMessage
 
 from config.settings import SETTINGS, Settings
 from graph.nodes.time_utils import trip_start_from_constraints
 from graph.state import TripState
 from tools import gmaps
+from tools.vertex import get_chat_model
 
 
 EARTH_RADIUS_KM = 6371.0088
+MIN_DWELL_SECONDS = 20 * 60
 FOOD_STOP_THRESHOLD_SECONDS = 90 * 60
 FOOD_STOP_DURATION_SECONDS = 45 * 60
 DINNER_STOP_DURATION_SECONDS = 75 * 60
@@ -27,20 +32,6 @@ REMOTE_DESTINATION_TYPES = {
     "nature_preserve",
     "park",
     "scenic_spot",
-}
-NATURE_DESTINATION_TYPES = {"beach", "campground", "hiking_area", "nature_preserve", "park"}
-SHORT_DESTINATION_TYPES = {
-    "art_gallery",
-    "church",
-    "cultural_landmark",
-    "historical_place",
-    "hindu_temple",
-    "mosque",
-    "movie_theater",
-    "museum",
-    "shopping_mall",
-    "store",
-    "tourist_attraction",
 }
 MEAL_ANCHOR_HOURS = {
     "breakfast": 9,
@@ -193,23 +184,6 @@ def _destination_is_remote(destination: dict[str, Any]) -> bool:
     return bool(_destination_types(destination).intersection(REMOTE_DESTINATION_TYPES))
 
 
-def _destination_stay_seconds(destination: dict[str, Any], available_seconds: int) -> int:
-    if available_seconds <= 0:
-        return 0
-
-    destination_types = _destination_types(destination)
-    if destination_types.intersection(NATURE_DESTINATION_TYPES):
-        cap_seconds = 3 * 3600
-    elif destination_types.intersection(FOOD_TYPES):
-        cap_seconds = 90 * 60
-    elif destination_types.intersection(SHORT_DESTINATION_TYPES):
-        cap_seconds = 2 * 3600
-    else:
-        cap_seconds = 2 * 3600
-
-    return min(available_seconds, cap_seconds)
-
-
 def _explicit_meals(state: TripState) -> list[str]:
     text = _state_text(state)
     meals: list[str] = []
@@ -242,6 +216,93 @@ def _meal_duration(meal: str) -> int:
 
 def _food_label(meal: str) -> str:
     return f"{meal.title()} options"
+
+
+DWELL_TIME_SYSTEM_PROMPT = """You are a trip timing expert. Given one or more destinations and trip constraints, decide how many minutes a group should spend at each destination.
+
+Return a JSON array with exactly one object per destination:
+[{"place_id": "...", "dwell_minutes": <integer>, "reason": "<one sentence explaining the recommendation>"}]
+
+Base your answer on: destination type, interests alignment, group size, budget feel, and total available time.
+Nature parks, beaches, and hiking areas warrant longer stays than temples, museums, or shopping stops.
+Always return dwell_minutes as a plain integer with no unit suffix.
+"""
+
+
+def _ceiling_dwell_seconds(
+    duration_hours: float,
+    total_travel_seconds: int,
+    num_destinations: int,
+) -> int:
+    available = max(int(duration_hours * 3600) - total_travel_seconds, 0)
+    return max(MIN_DWELL_SECONDS, available // max(num_destinations, 1))
+
+
+def _parse_dwell_response(content: Any, place_id: str) -> tuple[int, str]:
+    raw = content if isinstance(content, str) else str(content)
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        # attempt to extract array from surrounding text
+        start = raw.find("[")
+        end = raw.rfind("]") + 1
+        if start >= 0 and end > start:
+            data = json.loads(raw[start:end])
+        else:
+            raise
+
+    if isinstance(data, dict):
+        data = [data]
+    if not isinstance(data, list) or not data:
+        raise ValueError("Dwell-time response is not a non-empty list.")
+
+    # prefer the entry matching place_id; fall back to first entry
+    entry = next(
+        (item for item in data if str(item.get("place_id", "")) == place_id),
+        data[0],
+    )
+    dwell_minutes = int(entry.get("dwell_minutes", 0))
+    reason = str(entry.get("reason", "")).strip()
+    return dwell_minutes * 60, reason
+
+
+def _llm_dwell_seconds(
+    *,
+    destination: dict[str, Any],
+    constraints: dict[str, Any],
+    duration_hours: float,
+    num_destinations: int,
+    total_travel_seconds: int,
+    model: Any,
+) -> tuple[int, str]:
+    ceiling = _ceiling_dwell_seconds(duration_hours, total_travel_seconds, num_destinations)
+    payload = {
+        "destinations": [
+            {
+                "place_id": destination.get("place_id", ""),
+                "name": destination.get("name", ""),
+                "primary_type": destination.get("primary_type", ""),
+                "description": destination.get("description", ""),
+            }
+        ],
+        "constraints": {
+            "group_size": constraints.get("group_size", 1),
+            "vehicle": constraints.get("vehicle", "none"),
+            "interests": constraints.get("interests", []),
+            "budget_feel": constraints.get("budget_feel", "medium"),
+            "duration_hours": duration_hours,
+        },
+        "num_destinations": num_destinations,
+    }
+    response = model.invoke([
+        SystemMessage(content=DWELL_TIME_SYSTEM_PROMPT),
+        HumanMessage(content=json.dumps(payload, sort_keys=True)),
+    ])
+    dwell_seconds, reason = _parse_dwell_response(
+        response.content, destination.get("place_id", "")
+    )
+    clamped = max(MIN_DWELL_SECONDS, min(dwell_seconds, ceiling))
+    return clamped, reason
 
 
 def _coords_from_line(value: list[float]) -> dict[str, float]:
@@ -708,6 +769,7 @@ def build_route(
     settings: Settings = SETTINGS,
     gmaps_client: Any = gmaps,
     trip_start: datetime | None = None,
+    model: Any | None = None,
 ) -> dict[str, Any]:
     """Read the confirmed destination and trip constraints, then write the round-trip `route`, validated `food_stops`, `food_availability`, and ordered `timeline`."""
     destination = dict(state.get("validated_destination", {}))
@@ -740,8 +802,16 @@ def build_route(
     inbound_seconds = int(inbound.get("duration_seconds", 0))
     total_travel_seconds = outbound_seconds + inbound_seconds
     trip_end = departure + timedelta(hours=duration_hours)
-    available_destination_seconds = max(int(duration_hours * 3600) - total_travel_seconds, 0)
-    destination_seconds = _destination_stay_seconds(destination, available_destination_seconds)
+
+    chat_model = model or get_chat_model(temperature=0.1, response_mime_type="application/json")
+    destination_seconds, dwell_reason = _llm_dwell_seconds(
+        destination=destination,
+        constraints=constraints,
+        duration_hours=duration_hours,
+        num_destinations=1,
+        total_travel_seconds=total_travel_seconds,
+        model=chat_model,
+    )
 
     arrival_at_destination = departure + timedelta(seconds=outbound_seconds)
     depart_destination = arrival_at_destination + timedelta(seconds=destination_seconds)
@@ -764,6 +834,8 @@ def build_route(
     )
 
     destination_notes = f"Spend {_format_duration(destination_seconds)} here."
+    if dwell_reason:
+        destination_notes = f"{destination_notes} {dwell_reason}"
     destination_food_notes = [
         entry["notes"]
         for entry in food_availability

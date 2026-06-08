@@ -128,3 +128,5 @@ Node responsibilities at a glance:
 |------|------------|---------|
 | 2026-06-08 | CS0 | Created agents.md as shared north star for all agents working on this project |
 | 2026-06-08 | CS1 | Graph viz utility: tools/graph_viz.py exports docs/graph.mmd (and docs/graph.png if pygraphviz installed) when DEBUG=true |
+| 2026-06-08 | CS2 | LLM-driven dwell time in N4: single Gemini call determines dwell_minutes with 20 min floor and math ceiling; reason written to timeline notes; static lookup removed |
+| 2026-06-08 | CS2 | LLM-driven dwell time in N4: single Gemini call per run determines dwell_minutes with 20 min floor and math ceiling; reason written to timeline notes; static lookup kept as silent fallback |
