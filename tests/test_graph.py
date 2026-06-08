@@ -2,8 +2,9 @@ from graph.graph import (
     _structured_validation_result,
     apply_updates,
     build_graph,
+    confirm_selection,
     initial_trip_state,
-    request_next_candidate,
+    load_more_candidates,
     run_final_formatter,
     run_itinerary_composer,
     run_candidate_discovery,
@@ -23,8 +24,9 @@ def test_initial_trip_state_has_expected_defaults() -> None:
     assert state["candidates"] == []
     assert state["candidate_index"] == 0
     assert state["validated_candidates"] == []
-    assert state["presented_candidate_index"] == 0
-    assert state["validated_destination"] == {}
+    assert state["presented_candidate_indices"] == []
+    assert state["selected_destinations"] == []
+    assert state["max_destinations"] == 3
     assert state["validation_failures"] == []
     assert state["user_confirmed"] is False
     assert state["food_availability"] == []
@@ -90,8 +92,6 @@ def test_validate_until_destination_builds_validated_candidate_queue() -> None:
 
     assert calls == [0, 1, 2]
     assert result["validated_candidates"] == [{"name": "A"}, {"name": "C"}]
-    assert result["presented_candidate_index"] == 0
-    assert result["validated_destination"] == {"name": "A"}
     assert result["validation_failures"] == ["B rejected"]
 
 
@@ -105,8 +105,6 @@ def test_run_candidate_discovery_fetches_then_validates() -> None:
             "candidates": [{"name": "A"}],
             "candidate_index": 0,
             "validated_candidates": [],
-            "presented_candidate_index": 0,
-            "validated_destination": {},
             "isochrone_polygon": {"properties": {"center": {"lat": 1, "lng": 2}}},
         }
 
@@ -124,33 +122,54 @@ def test_run_candidate_discovery_fetches_then_validates() -> None:
     )
 
     assert result["validated_candidates"] == [{"name": "A"}]
-    assert result["validated_destination"] == {"name": "A"}
 
 
-def test_request_next_candidate_advances_within_validated_queue() -> None:
+def test_confirm_selection_writes_chosen_destinations() -> None:
     state = initial_trip_state()
-    state["validated_candidates"] = [{"name": "A"}, {"name": "B"}]
-    state["presented_candidate_index"] = 0
-    state["validated_destination"] = {"name": "A"}
-    state["validation_failures"] = ["Hidden raw candidate rejected: closed"]
+    state["validated_candidates"] = [{"name": "A"}, {"name": "B"}, {"name": "C"}]
 
-    result = request_next_candidate(state)
+    result = confirm_selection(state, [0, 2])
 
-    assert result["presented_candidate_index"] == 1
-    assert result["validated_destination"] == {"name": "B"}
-    assert result["validation_failures"] == ["Hidden raw candidate rejected: closed"]
+    assert result["selected_destinations"] == [{"name": "A"}, {"name": "C"}]
+    assert result["user_confirmed"] is True
 
 
-def test_request_next_candidate_clears_destination_when_queue_is_exhausted() -> None:
+def test_confirm_selection_caps_at_max_destinations() -> None:
+    state = initial_trip_state()
+    state["max_destinations"] = 2
+    state["validated_candidates"] = [{"name": "A"}, {"name": "B"}, {"name": "C"}]
+
+    result = confirm_selection(state, [0, 1, 2])
+
+    assert result["selected_destinations"] == [{"name": "A"}, {"name": "B"}]
+    assert result["user_confirmed"] is True
+
+
+def test_confirm_selection_with_no_choices_does_not_confirm() -> None:
     state = initial_trip_state()
     state["validated_candidates"] = [{"name": "A"}]
-    state["presented_candidate_index"] = 0
-    state["validated_destination"] = {"name": "A"}
 
-    result = request_next_candidate(state)
+    result = confirm_selection(state, [])
 
-    assert result["presented_candidate_index"] == 1
-    assert result["validated_destination"] == {}
+    assert result["selected_destinations"] == []
+    assert result["user_confirmed"] is False
+
+
+def test_load_more_candidates_validates_additional_options() -> None:
+    state = initial_trip_state()
+    state["candidates"] = [{"name": "A"}, {"name": "B"}]
+    state["candidate_index"] = 1
+    state["validated_candidates"] = [{"name": "A"}]
+
+    def fake_validator(next_state):
+        return {
+            "candidate_index": 2,
+            "validated_candidates": [{"name": "A"}, {"name": "B"}],
+        }
+
+    result = load_more_candidates(state, validator=fake_validator, batch_size=3)
+
+    assert result["validated_candidates"] == [{"name": "A"}, {"name": "B"}]
 
 
 def test_run_route_builder_applies_route_node_update() -> None:
@@ -237,7 +256,7 @@ def test_structured_validation_result_routes_error_with_candidates_back_to_n4() 
             "severity": "error",
         }
     ]
-    state["validated_candidates"] = [{"place_id": "next"}]
+    state["selected_destinations"] = [{"place_id": "next"}]
 
     assert _structured_validation_result(state) == "n4_route"
 

@@ -16,6 +16,7 @@ from tools.vertex import REASONING_GEMINI_MODEL, get_chat_model
 
 EARTH_RADIUS_KM = 6371.0088
 MIN_DWELL_SECONDS = 20 * 60
+DEFAULT_DWELL_SECONDS = 60 * 60
 FOOD_STOP_THRESHOLD_SECONDS = 90 * 60
 FOOD_STOP_DURATION_SECONDS = 45 * 60
 DINNER_STOP_DURATION_SECONDS = 75 * 60
@@ -56,6 +57,10 @@ def _format_duration(seconds: int) -> str:
 
 def _line_coords(coords: dict[str, float]) -> list[float]:
     return [float(coords["lng"]), float(coords["lat"])]
+
+
+def _coords_from_line(value: list[float]) -> dict[str, float]:
+    return {"lat": float(value[1]), "lng": float(value[0])}
 
 
 def _distance_km(start: dict[str, float], end: dict[str, float]) -> float:
@@ -115,22 +120,45 @@ def _decode_polyline(encoded: str) -> list[list[float]]:
     return coordinates
 
 
-def _route_coordinates(
-    *,
+def _interpolate_coords(
     start: dict[str, float],
-    destination: dict[str, float],
-    outbound: dict[str, Any],
-    inbound: dict[str, Any],
-) -> list[list[float]]:
-    outbound_points = _decode_polyline(outbound.get("encoded_polyline", ""))
-    inbound_points = _decode_polyline(inbound.get("encoded_polyline", ""))
-    if not outbound_points and not inbound_points:
-        return [_line_coords(start), _line_coords(destination), _line_coords(start)]
-    if outbound_points and inbound_points:
-        return [*outbound_points, *inbound_points[1:]]
-    if outbound_points:
-        return [*outbound_points, _line_coords(start)]
-    return [_line_coords(start), *inbound_points]
+    end: dict[str, float],
+    fraction: float,
+) -> dict[str, float]:
+    clamped = max(0.0, min(1.0, fraction))
+    return {
+        "lat": start["lat"] + (end["lat"] - start["lat"]) * clamped,
+        "lng": start["lng"] + (end["lng"] - start["lng"]) * clamped,
+    }
+
+
+def _point_on_polyline(points: list[list[float]], fraction: float) -> dict[str, float]:
+    if not points:
+        raise ValueError("Cannot sample an empty route polyline.")
+    if len(points) == 1:
+        return _coords_from_line(points[0])
+
+    segments: list[tuple[dict[str, float], dict[str, float], float]] = []
+    total_distance = 0.0
+    for index in range(len(points) - 1):
+        start = _coords_from_line(points[index])
+        end = _coords_from_line(points[index + 1])
+        distance = _distance_km(start, end)
+        segments.append((start, end, distance))
+        total_distance += distance
+
+    if total_distance <= 0:
+        return _coords_from_line(points[0])
+
+    target_distance = total_distance * max(0.0, min(1.0, fraction))
+    travelled = 0.0
+    for start, end, distance in segments:
+        if travelled + distance >= target_distance:
+            segment_fraction = (target_distance - travelled) / distance if distance else 0
+            return _interpolate_coords(start, end, segment_fraction)
+        travelled += distance
+
+    return _coords_from_line(points[-1])
 
 
 def _timeline_entry(
@@ -225,6 +253,7 @@ Return a JSON array with exactly one object per destination:
 
 Base your answer on: destination type, interests alignment, group size, budget feel, and total available time.
 Nature parks, beaches, and hiking areas warrant longer stays than temples, museums, or shopping stops.
+When several destinations share the day, balance the minutes so the whole trip fits the available time.
 Always return dwell_minutes as a plain integer with no unit suffix.
 """
 
@@ -238,43 +267,33 @@ def _ceiling_dwell_seconds(
     return max(MIN_DWELL_SECONDS, available // max(num_destinations, 1))
 
 
-def _parse_dwell_response(content: Any, place_id: str) -> tuple[int, str]:
+def _parse_dwell_entries(content: Any) -> list[dict[str, Any]]:
     raw = content if isinstance(content, str) else str(content)
     try:
         data = json.loads(raw)
     except json.JSONDecodeError:
-        # attempt to extract array from surrounding text
         start = raw.find("[")
         end = raw.rfind("]") + 1
         if start >= 0 and end > start:
             data = json.loads(raw[start:end])
         else:
             raise
-
     if isinstance(data, dict):
         data = [data]
-    if not isinstance(data, list) or not data:
-        raise ValueError("Dwell-time response is not a non-empty list.")
-
-    # prefer the entry matching place_id; fall back to first entry
-    entry = next(
-        (item for item in data if str(item.get("place_id", "")) == place_id),
-        data[0],
-    )
-    dwell_minutes = int(entry.get("dwell_minutes", 0))
-    reason = str(entry.get("reason", "")).strip()
-    return dwell_minutes * 60, reason
+    if not isinstance(data, list):
+        raise ValueError("Dwell-time response is not a list.")
+    return [item for item in data if isinstance(item, dict)]
 
 
-def _llm_dwell_seconds(
+def _llm_dwell_times(
     *,
-    destination: dict[str, Any],
+    destinations: list[dict[str, Any]],
     constraints: dict[str, Any],
     duration_hours: float,
-    num_destinations: int,
     total_travel_seconds: int,
     model: Any,
-) -> tuple[int, str]:
+) -> list[tuple[int, str]]:
+    num_destinations = len(destinations)
     ceiling = _ceiling_dwell_seconds(duration_hours, total_travel_seconds, num_destinations)
     payload = {
         "destinations": [
@@ -284,6 +303,7 @@ def _llm_dwell_seconds(
                 "primary_type": destination.get("primary_type", ""),
                 "description": destination.get("description", ""),
             }
+            for destination in destinations
         ],
         "constraints": {
             "group_size": constraints.get("group_size", 1),
@@ -294,113 +314,52 @@ def _llm_dwell_seconds(
         },
         "num_destinations": num_destinations,
     }
-    response = model.invoke([
-        SystemMessage(content=DWELL_TIME_SYSTEM_PROMPT),
-        HumanMessage(content=json.dumps(payload, sort_keys=True)),
-    ])
-    dwell_seconds, reason = _parse_dwell_response(
-        response.content, destination.get("place_id", "")
-    )
-    clamped = max(MIN_DWELL_SECONDS, min(dwell_seconds, ceiling))
-    return clamped, reason
 
+    by_id: dict[str, tuple[int, str]] = {}
+    ordered: list[tuple[int, str]] = []
+    try:
+        response = model.invoke([
+            SystemMessage(content=DWELL_TIME_SYSTEM_PROMPT),
+            HumanMessage(content=json.dumps(payload, sort_keys=True)),
+        ])
+        for entry in _parse_dwell_entries(response.content):
+            try:
+                minutes = int(entry.get("dwell_minutes", 0))
+            except (TypeError, ValueError):
+                minutes = 0
+            reason = str(entry.get("reason", "")).strip()
+            place_id = str(entry.get("place_id", "")).strip()
+            if place_id:
+                by_id[place_id] = (minutes, reason)
+            ordered.append((minutes, reason))
+    except (json.JSONDecodeError, ValueError, KeyError, AttributeError):
+        by_id, ordered = {}, []
 
-def _coords_from_line(value: list[float]) -> dict[str, float]:
-    return {"lat": float(value[1]), "lng": float(value[0])}
-
-
-def _interpolate_coords(
-    start: dict[str, float],
-    end: dict[str, float],
-    fraction: float,
-) -> dict[str, float]:
-    clamped = max(0.0, min(1.0, fraction))
-    return {
-        "lat": start["lat"] + (end["lat"] - start["lat"]) * clamped,
-        "lng": start["lng"] + (end["lng"] - start["lng"]) * clamped,
-    }
-
-
-def _point_on_polyline(points: list[list[float]], fraction: float) -> dict[str, float]:
-    if not points:
-        raise ValueError("Cannot sample an empty route polyline.")
-    if len(points) == 1:
-        return _coords_from_line(points[0])
-
-    segments: list[tuple[dict[str, float], dict[str, float], float]] = []
-    total_distance = 0.0
-    for index in range(len(points) - 1):
-        start = _coords_from_line(points[index])
-        end = _coords_from_line(points[index + 1])
-        distance = _distance_km(start, end)
-        segments.append((start, end, distance))
-        total_distance += distance
-
-    if total_distance <= 0:
-        return _coords_from_line(points[0])
-
-    target_distance = total_distance * max(0.0, min(1.0, fraction))
-    travelled = 0.0
-    for start, end, distance in segments:
-        if travelled + distance >= target_distance:
-            segment_fraction = (target_distance - travelled) / distance if distance else 0
-            return _interpolate_coords(start, end, segment_fraction)
-        travelled += distance
-
-    return _coords_from_line(points[-1])
+    results: list[tuple[int, str]] = []
+    for index, destination in enumerate(destinations):
+        place_id = str(destination.get("place_id", "")).strip()
+        if place_id and place_id in by_id:
+            minutes, reason = by_id[place_id]
+        elif index < len(ordered):
+            minutes, reason = ordered[index]
+        else:
+            minutes, reason = DEFAULT_DWELL_SECONDS // 60, ""
+        seconds = minutes * 60 if minutes > 0 else DEFAULT_DWELL_SECONDS
+        clamped = max(MIN_DWELL_SECONDS, min(seconds, ceiling))
+        results.append((clamped, reason))
+    return results
 
 
 def _leg_points(
     *,
     fallback_start: dict[str, float],
     fallback_end: dict[str, float],
-    route: dict[str, Any],
+    encoded_polyline: str,
 ) -> list[list[float]]:
-    decoded = _decode_polyline(route.get("encoded_polyline", ""))
+    decoded = _decode_polyline(encoded_polyline)
     if decoded:
         return decoded
     return [_line_coords(fallback_start), _line_coords(fallback_end)]
-
-
-def _route_point_for_meal(
-    *,
-    meal_time: datetime,
-    departure: datetime,
-    arrival_at_destination: datetime,
-    depart_destination: datetime,
-    return_arrival: datetime,
-    start: dict[str, float],
-    destination_coords: dict[str, float],
-    outbound: dict[str, Any],
-    inbound: dict[str, Any],
-) -> tuple[str, dict[str, float], datetime]:
-    outbound_points = _leg_points(
-        fallback_start=start,
-        fallback_end=destination_coords,
-        route=outbound,
-    )
-    inbound_points = _leg_points(
-        fallback_start=destination_coords,
-        fallback_end=start,
-        route=inbound,
-    )
-
-    if meal_time <= arrival_at_destination:
-        duration = max((arrival_at_destination - departure).total_seconds(), 1)
-        fraction = (meal_time - departure).total_seconds() / duration
-        return "outbound", _point_on_polyline(outbound_points, fraction), meal_time
-
-    if meal_time <= depart_destination:
-        return "destination", destination_coords, meal_time
-
-    if meal_time <= return_arrival:
-        duration = max((return_arrival - depart_destination).total_seconds(), 1)
-        fraction = (meal_time - depart_destination).total_seconds() / duration
-        return "return", _point_on_polyline(inbound_points, fraction), meal_time
-
-    duration = max((return_arrival - depart_destination).total_seconds(), 1)
-    near_end_fraction = 0.7 if (meal_time - return_arrival) <= timedelta(minutes=45) else 1.0
-    return "return", _point_on_polyline(inbound_points, near_end_fraction), return_arrival
 
 
 def _search_food_near(
@@ -507,28 +466,98 @@ def _route_food_stop(
     }
 
 
+def _build_segments(
+    *,
+    start: dict[str, float],
+    stops: list[dict[str, Any]],
+    legs: list[dict[str, Any]],
+    departure: datetime,
+    return_arrival: datetime,
+) -> list[dict[str, Any]]:
+    """Ordered list of `leg` (travel) and `dwell` (at a stop) phases used to place meals per segment."""
+    segments: list[dict[str, Any]] = []
+    prev_coords = start
+    prev_time = departure
+    for index, stop in enumerate(stops):
+        leg = legs[index] if index < len(legs) else {}
+        segments.append(
+            {
+                "kind": "leg",
+                "depart": prev_time,
+                "arrive": stop["arrive"],
+                "points": _leg_points(
+                    fallback_start=prev_coords,
+                    fallback_end=stop["coords"],
+                    encoded_polyline=leg.get("encoded_polyline", ""),
+                ),
+            }
+        )
+        segments.append(
+            {
+                "kind": "dwell",
+                "start": stop["arrive"],
+                "end": stop["depart"],
+                "coords": stop["coords"],
+                "destination": stop["destination"],
+            }
+        )
+        prev_coords = stop["coords"]
+        prev_time = stop["depart"]
+
+    final_leg = legs[-1] if legs else {}
+    segments.append(
+        {
+            "kind": "leg",
+            "depart": prev_time,
+            "arrive": return_arrival,
+            "points": _leg_points(
+                fallback_start=prev_coords,
+                fallback_end=start,
+                encoded_polyline=final_leg.get("encoded_polyline", ""),
+            ),
+        }
+    )
+    return segments
+
+
+def _locate_meal(
+    segments: list[dict[str, Any]],
+    meal_time: datetime,
+) -> tuple[str, dict[str, float], dict[str, Any] | None]:
+    """Find which phase a meal time falls in. Returns (location_type, coords, destination)."""
+    for segment in segments:
+        if segment["kind"] == "dwell" and segment["start"] <= meal_time <= segment["end"]:
+            return "destination", segment["coords"], segment["destination"]
+        if segment["kind"] == "leg" and segment["depart"] <= meal_time <= segment["arrive"]:
+            duration = max((segment["arrive"] - segment["depart"]).total_seconds(), 1)
+            fraction = (meal_time - segment["depart"]).total_seconds() / duration
+            return "leg", _point_on_polyline(segment["points"], fraction), None
+
+    # Meal falls after the trip ends: anchor it near the end of the final leg.
+    final_leg = next(
+        (segment for segment in reversed(segments) if segment["kind"] == "leg"),
+        None,
+    )
+    if final_leg:
+        return "after", _point_on_polyline(final_leg["points"], 0.7), None
+    return "after", segments[0].get("coords", {"lat": 0.0, "lng": 0.0}), None
+
+
 def _plan_explicit_meal(
     *,
     meal: str,
-    state: TripState,
-    destination: dict[str, Any],
-    destination_coords: dict[str, float],
+    segments: list[dict[str, Any]],
     departure: datetime,
-    arrival_at_destination: datetime,
-    depart_destination: datetime,
-    return_arrival: datetime,
-    start: dict[str, float],
-    outbound: dict[str, Any],
-    inbound: dict[str, Any],
     gmaps_client: Any,
     settings: Settings,
-) -> tuple[dict[str, Any], dict[str, Any] | None, datetime | None]:
+) -> tuple[dict[str, Any], dict[str, Any] | None]:
     meal_time = _meal_time(meal, departure)
     duration_seconds = _meal_duration(meal)
+    location_type, center, destination = _locate_meal(segments, meal_time)
 
-    if _destination_is_food_oriented(destination):
+    if location_type == "destination" and destination and _destination_is_food_oriented(destination):
         notes = (
-            f"{destination.get('name', 'The destination')} is food-oriented, so plan "
+            f"{destination.get('name', 'This stop')} is food-oriented, so plan "
             f"{meal} there instead of adding a separate restaurant stop."
         )
         return (
@@ -536,28 +565,16 @@ def _plan_explicit_meal(
                 meal=meal,
                 need="explicit",
                 status="eat_at_destination",
-                time_value=arrival_at_destination,
-                coords=destination_coords,
+                time_value=meal_time,
+                coords=center,
                 notes=notes,
             ),
             None,
-            None,
         )
 
-    location_type, search_center, stop_start = _route_point_for_meal(
-        meal_time=meal_time,
-        departure=departure,
-        arrival_at_destination=arrival_at_destination,
-        depart_destination=depart_destination,
-        return_arrival=return_arrival,
-        start=start,
-        destination_coords=destination_coords,
-        outbound=outbound,
-        inbound=inbound,
-    )
     recommendations = _search_food_near(
-        center=search_center,
-        stop_start=stop_start,
+        center=center,
+        stop_start=meal_time,
         duration_seconds=duration_seconds,
         gmaps_client=gmaps_client,
         settings=settings,
@@ -567,17 +584,16 @@ def _plan_explicit_meal(
         names = _food_names(recommendations)
         if location_type == "destination":
             status = "destination_options"
-            notes = f"Food is available near the destination for {meal}. Google Maps options: {names}."
+            notes = f"Food is available near this stop for {meal}. Google Maps options: {names}."
         else:
             status = "route_options"
             notes = f"Plan {meal} near this route segment. Google Maps options: {names}."
-
         availability = _availability_entry(
             meal=meal,
             need="explicit",
             status=status,
-            time_value=stop_start,
-            coords=search_center,
+            time_value=meal_time,
+            coords=center,
             notes=notes,
             recommended_places=recommendations,
         )
@@ -585,31 +601,27 @@ def _plan_explicit_meal(
             meal=meal,
             need="explicit",
             status=status,
-            stop_start=stop_start,
+            stop_start=meal_time,
             duration_seconds=duration_seconds,
-            coords=search_center,
+            coords=center,
             notes=notes,
             recommended_places=recommendations,
         )
-        adjusted_return = None
-        if location_type == "return" and stop_start >= return_arrival:
-            adjusted_return = stop_start + timedelta(seconds=duration_seconds)
-        return availability, food_stop, adjusted_return
+        return availability, food_stop
 
     notes = (
-        f"Food availability for {meal} could not be confirmed near the destination or route. "
-        "Carry water/snacks or pick up parcel before leaving."
+        f"Food availability for {meal} could not be confirmed near the stops or route. "
+        "Carry water/snacks or pick up a parcel before leaving."
     )
     return (
         _availability_entry(
             meal=meal,
             need="explicit",
             status="carry_or_parcel",
-            time_value=stop_start,
-            coords=search_center,
+            time_value=meal_time,
+            coords=center,
             notes=notes,
         ),
-        None,
         None,
     )
 
@@ -617,101 +629,79 @@ def _plan_explicit_meal(
 def _plan_food_availability(
     *,
     state: TripState,
-    destination: dict[str, Any],
-    destination_coords: dict[str, float],
+    stops: list[dict[str, Any]],
+    segments: list[dict[str, Any]],
     departure: datetime,
-    arrival_at_destination: datetime,
-    depart_destination: datetime,
     return_arrival: datetime,
     trip_end: datetime,
     start: dict[str, float],
-    outbound: dict[str, Any],
-    inbound: dict[str, Any],
     gmaps_client: Any,
     settings: Settings,
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]], datetime]:
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     availability: list[dict[str, Any]] = []
     food_stops: list[dict[str, Any]] = []
-    adjusted_return = return_arrival
 
     for meal in _explicit_meals(state):
-        entry, food_stop, new_return = _plan_explicit_meal(
+        entry, food_stop = _plan_explicit_meal(
             meal=meal,
-            state=state,
-            destination=destination,
-            destination_coords=destination_coords,
+            segments=segments,
             departure=departure,
-            arrival_at_destination=arrival_at_destination,
-            depart_destination=depart_destination,
-            return_arrival=adjusted_return,
-            start=start,
-            outbound=outbound,
-            inbound=inbound,
             gmaps_client=gmaps_client,
             settings=settings,
         )
         availability.append(entry)
         if food_stop:
             food_stops.append(food_stop)
-        if new_return:
-            adjusted_return = new_return
 
     if availability:
-        return availability, food_stops, adjusted_return
+        return availability, food_stops
 
     interests = {
         str(interest).strip().lower()
         for interest in state.get("constraints", {}).get("interests", [])
     }
-    if "food" in interests and _destination_is_food_oriented(destination):
+    food_oriented_stops = [stop for stop in stops if _destination_is_food_oriented(stop["destination"])]
+    if "food" in interests and food_oriented_stops:
+        stop = food_oriented_stops[0]
         availability.append(
             _availability_entry(
                 meal="general",
                 need="interest",
                 status="eat_at_destination",
-                time_value=arrival_at_destination,
-                coords=destination_coords,
+                time_value=stop["arrive"],
+                coords=stop["coords"],
                 notes=(
-                    f"{destination.get('name', 'The destination')} is food-oriented, "
-                    "so food is already part of this stop."
+                    f"{stop['destination'].get('name', 'A stop')} is food-oriented, "
+                    "so food is already part of this trip."
                 ),
             )
         )
-        return availability, food_stops, adjusted_return
+        return availability, food_stops
 
     dinner_time = _meal_time("dinner", departure)
-    if departure <= dinner_time <= trip_end and adjusted_return <= dinner_time + timedelta(minutes=30):
+    if departure <= dinner_time <= trip_end and return_arrival <= dinner_time + timedelta(minutes=30):
         availability.append(
             _availability_entry(
                 meal="dinner",
                 need="optional",
                 status="eat_at_home",
-                time_value=adjusted_return,
+                time_value=return_arrival,
                 coords=start,
                 notes=(
-                    f"You are expected back around {_format_time(adjusted_return)}, "
+                    f"You are expected back around {_format_time(return_arrival)}, "
                     "so dinner can be at home; no separate restaurant stop is needed."
                 ),
             )
         )
 
     breakfast_time = _meal_time("breakfast", departure)
-    if (
-        departure.hour <= 7
-        and (arrival_at_destination - departure).total_seconds() > FOOD_STOP_THRESHOLD_SECONDS
-        and _destination_is_remote(destination)
-    ):
-        search_center = _route_point_for_meal(
-            meal_time=breakfast_time,
-            departure=departure,
-            arrival_at_destination=arrival_at_destination,
-            depart_destination=depart_destination,
-            return_arrival=adjusted_return,
-            start=start,
-            destination_coords=destination_coords,
-            outbound=outbound,
-            inbound=inbound,
-        )[1]
+    remote_stops = [stop for stop in stops if _destination_is_remote(stop["destination"])]
+    first_stop = stops[0] if stops else None
+    morning_is_long = bool(
+        first_stop and (first_stop["arrive"] - departure).total_seconds() > FOOD_STOP_THRESHOLD_SECONDS
+    )
+    if departure.hour <= 7 and remote_stops and morning_is_long:
+        _, search_center, _ = _locate_meal(segments, breakfast_time)
         recommendations = _search_food_near(
             center=search_center,
             stop_start=breakfast_time,
@@ -760,7 +750,7 @@ def _plan_food_availability(
                 )
             )
 
-    return availability, food_stops, adjusted_return
+    return availability, food_stops
 
 
 def build_route(
@@ -771,106 +761,131 @@ def build_route(
     trip_start: datetime | None = None,
     model: Any | None = None,
 ) -> dict[str, Any]:
-    """Read the confirmed destination and trip constraints, then write the round-trip `route`, validated `food_stops`, `food_availability`, and ordered `timeline`."""
-    destination = dict(state.get("validated_destination", {}))
-    if not destination:
+    """Read `selected_destinations` (1-3 stops) and trip constraints, then write the chained round-trip `route`, per-segment `food_stops`, `food_availability`, and a single ordered `timeline` across all stops."""
+    selected = [dict(destination) for destination in state.get("selected_destinations", [])]
+    if not selected:
         return {"route": {}, "food_stops": [], "food_availability": [], "timeline": []}
 
     constraints = state["constraints"]
     start = state["isochrone_polygon"]["properties"]["center"]
     start_label = str(constraints.get("start_location") or "Start")
-    destination_coords = destination["coords"]
-    destination_label = str(destination.get("name") or "Destination")
     duration_hours = float(constraints["duration_hours"])
     travel_mode = _travel_mode(str(constraints.get("vehicle", "none")))
     departure = trip_start or trip_start_from_constraints(constraints)
 
-    outbound = gmaps_client.compute_route(
+    route_result = gmaps_client.compute_route(
         origin=start,
-        destination=destination_coords,
-        settings=settings,
-        travel_mode=travel_mode,
-    )
-    inbound = gmaps_client.compute_route(
-        origin=destination_coords,
         destination=start,
         settings=settings,
         travel_mode=travel_mode,
+        intermediates=[destination["coords"] for destination in selected],
     )
-
-    outbound_seconds = int(outbound.get("duration_seconds", 0))
-    inbound_seconds = int(inbound.get("duration_seconds", 0))
-    total_travel_seconds = outbound_seconds + inbound_seconds
+    legs = list(route_result.get("normalized_legs") or [])
+    total_travel_seconds = sum(int(leg.get("duration_seconds", 0)) for leg in legs)
     trip_end = departure + timedelta(hours=duration_hours)
 
-    chat_model = model or get_chat_model(model=REASONING_GEMINI_MODEL, temperature=1.0, response_mime_type="application/json")
-    destination_seconds, dwell_reason = _llm_dwell_seconds(
-        destination=destination,
+    chat_model = model or get_chat_model(
+        model=REASONING_GEMINI_MODEL,
+        temperature=1.0,
+        response_mime_type="application/json",
+    )
+    dwell_times = _llm_dwell_times(
+        destinations=selected,
         constraints=constraints,
         duration_hours=duration_hours,
-        num_destinations=1,
         total_travel_seconds=total_travel_seconds,
         model=chat_model,
     )
 
-    arrival_at_destination = departure + timedelta(seconds=outbound_seconds)
-    depart_destination = arrival_at_destination + timedelta(seconds=destination_seconds)
-    return_arrival = depart_destination + timedelta(seconds=inbound_seconds)
+    stops: list[dict[str, Any]] = []
+    current = departure
+    for index, destination in enumerate(selected):
+        leg = legs[index] if index < len(legs) else {}
+        arrive = current + timedelta(seconds=int(leg.get("duration_seconds", 0)))
+        dwell_seconds, reason = dwell_times[index]
+        depart = arrive + timedelta(seconds=dwell_seconds)
+        stops.append(
+            {
+                "index": index,
+                "destination": destination,
+                "coords": destination["coords"],
+                "label": str(destination.get("name") or f"Stop {index + 1}"),
+                "arrive": arrive,
+                "depart": depart,
+                "dwell_seconds": dwell_seconds,
+                "reason": reason,
+            }
+        )
+        current = depart
 
-    food_availability, food_stops, return_arrival = _plan_food_availability(
-        state=state,
-        destination=destination,
-        destination_coords=destination_coords,
+    final_leg_seconds = int(legs[-1].get("duration_seconds", 0)) if legs else 0
+    return_arrival = current + timedelta(seconds=final_leg_seconds)
+
+    segments = _build_segments(
+        start=start,
+        stops=stops,
+        legs=legs,
         departure=departure,
-        arrival_at_destination=arrival_at_destination,
-        depart_destination=depart_destination,
+        return_arrival=return_arrival,
+    )
+    food_availability, food_stops = _plan_food_availability(
+        state=state,
+        stops=stops,
+        segments=segments,
+        departure=departure,
         return_arrival=return_arrival,
         trip_end=trip_end,
         start=start,
-        outbound=outbound,
-        inbound=inbound,
         gmaps_client=gmaps_client,
         settings=settings,
     )
 
-    destination_notes = f"Spend {_format_duration(destination_seconds)} here."
-    if dwell_reason:
-        destination_notes = f"{destination_notes} {dwell_reason}"
-    destination_food_notes = [
-        entry["notes"]
-        for entry in food_availability
-        if entry.get("status") == "eat_at_destination"
-    ]
-    if destination_food_notes:
-        destination_notes = f"{destination_notes} {destination_food_notes[0]}"
-
-    timeline = [
+    timeline: list[dict[str, Any]] = [
         _timeline_entry(
             time_value=departure,
             label=f"Depart {start_label}",
             coords=start,
             entry_type="start",
             notes="Start the trip.",
-        ),
-        _timeline_entry(
-            time_value=arrival_at_destination,
-            label=destination_label,
-            coords=destination_coords,
-            entry_type="destination",
-            notes=destination_notes,
-        ),
-        _timeline_entry(
-            time_value=depart_destination,
-            label=f"Leave {destination_label}",
-            coords=destination_coords,
-            entry_type="return_departure",
-            notes="Start the return journey.",
-        ),
+        )
     ]
+    food_notes_by_coords = {
+        (round(entry["coords"].get("lat", 0), 4), round(entry["coords"].get("lng", 0), 4)): entry["notes"]
+        for entry in food_availability
+        if entry.get("status") == "eat_at_destination" and isinstance(entry.get("coords"), dict)
+    }
+    for stop in stops:
+        notes = f"Stop {stop['index'] + 1}. Spend {_format_duration(stop['dwell_seconds'])} here."
+        if stop["reason"]:
+            notes = f"{notes} {stop['reason']}"
+        coord_key = (round(stop["coords"].get("lat", 0), 4), round(stop["coords"].get("lng", 0), 4))
+        if coord_key in food_notes_by_coords:
+            notes = f"{notes} {food_notes_by_coords[coord_key]}"
+        timeline.append(
+            _timeline_entry(
+                time_value=stop["arrive"],
+                label=f"Stop {stop['index'] + 1}: {stop['label']}",
+                coords=stop["coords"],
+                entry_type="destination",
+                notes=notes,
+            )
+        )
+        timeline.append(
+            _timeline_entry(
+                time_value=stop["depart"],
+                label=f"Leave {stop['label']}",
+                coords=stop["coords"],
+                entry_type="departure",
+                notes="Continue the journey.",
+            )
+        )
     for food_stop in food_stops:
         timeline.append(
             _timeline_entry(
-                time_value=datetime.combine(departure.date(), datetime.strptime(food_stop["stop_start"], "%H:%M").time()),
+                time_value=datetime.combine(
+                    departure.date(),
+                    datetime.strptime(food_stop["stop_start"], "%H:%M").time(),
+                ),
                 label=food_stop["name"],
                 coords=food_stop["coords"],
                 entry_type="food",
@@ -888,21 +903,26 @@ def build_route(
     )
     timeline.sort(key=lambda entry: entry["time"])
 
-    waypoints = [
+    waypoints: list[dict[str, Any]] = [
         {
             "label": start_label,
             "coords": start,
             "type": "start",
             "eta": _format_time(departure),
-        },
-        {
-            "label": destination_label,
-            "coords": destination_coords,
-            "type": "destination",
-            "eta": _format_time(arrival_at_destination),
-            "notes": destination.get("description", ""),
-        },
-        *[
+        }
+    ]
+    for stop in stops:
+        waypoints.append(
+            {
+                "label": f"Stop {stop['index'] + 1}: {stop['label']}",
+                "coords": stop["coords"],
+                "type": "destination",
+                "eta": _format_time(stop["arrive"]),
+                "notes": stop["destination"].get("description", ""),
+            }
+        )
+    for food_stop in food_stops:
+        waypoints.append(
             {
                 "label": food_stop["name"],
                 "coords": food_stop["coords"],
@@ -910,67 +930,65 @@ def build_route(
                 "eta": food_stop["stop_start"],
                 "notes": food_stop["notes"],
             }
-            for food_stop in food_stops
-        ],
+        )
+    waypoints.append(
         {
             "label": start_label,
             "coords": start,
             "type": "return",
             "eta": _format_time(return_arrival),
-        },
-    ]
+        }
+    )
+
+    coordinates = _decode_polyline(route_result.get("encoded_polyline", ""))
+    if not coordinates:
+        coordinates = [
+            _line_coords(start),
+            *[_line_coords(stop["coords"]) for stop in stops],
+            _line_coords(start),
+        ]
+
+    total_distance_meters = int(route_result.get("distance_meters", 0)) or sum(
+        int(leg.get("distance_meters", 0)) for leg in legs
+    )
+
+    route_legs: list[dict[str, Any]] = []
+    leg_points = [start_label, *[f"Stop {stop['index'] + 1}: {stop['label']}" for stop in stops], start_label]
+    leg_departs = [departure, *[stop["depart"] for stop in stops]]
+    leg_arrives = [*[stop["arrive"] for stop in stops], return_arrival]
+    for index, leg in enumerate(legs):
+        route_legs.append(
+            {
+                "type": "outbound" if index == 0 else ("return" if index == len(legs) - 1 else "between"),
+                "from": leg_points[index] if index < len(leg_points) else start_label,
+                "to": leg_points[index + 1] if index + 1 < len(leg_points) else start_label,
+                "distance_meters": int(leg.get("distance_meters", 0)),
+                "duration_seconds": int(leg.get("duration_seconds", 0)),
+                "depart_time": _format_time(leg_departs[index]) if index < len(leg_departs) else "",
+                "arrive_time": _format_time(leg_arrives[index]) if index < len(leg_arrives) else "",
+            }
+        )
 
     route = {
         "geojson": {
             "type": "Feature",
             "geometry": {
                 "type": "LineString",
-                "coordinates": _route_coordinates(
-                    start=start,
-                    destination=destination_coords,
-                    outbound=outbound,
-                    inbound=inbound,
-                ),
+                "coordinates": coordinates,
             },
             "properties": {
                 "type": "route",
-                "distance_meters": int(outbound.get("distance_meters", 0))
-                + int(inbound.get("distance_meters", 0)),
+                "distance_meters": total_distance_meters,
                 "travel_duration_seconds": total_travel_seconds,
             },
         },
         "waypoints": waypoints,
-        "legs": [
-            {
-                "type": "outbound",
-                "from": start_label,
-                "to": destination_label,
-                "distance_meters": int(outbound.get("distance_meters", 0)),
-                "duration_seconds": outbound_seconds,
-                "depart_time": _format_time(departure),
-                "arrive_time": _format_time(arrival_at_destination),
-                "steps": outbound.get("legs", []),
-            },
-            {
-                "type": "return",
-                "from": destination_label,
-                "to": start_label,
-                "distance_meters": int(inbound.get("distance_meters", 0)),
-                "duration_seconds": inbound_seconds,
-                "depart_time": _format_time(depart_destination),
-                "arrive_time": _format_time(return_arrival),
-                "steps": inbound.get("legs", []),
-            },
-        ],
-        "encoded_polylines": {
-            "outbound": outbound.get("encoded_polyline", ""),
-            "return": inbound.get("encoded_polyline", ""),
-        },
-        "total_distance_meters": int(outbound.get("distance_meters", 0))
-        + int(inbound.get("distance_meters", 0)),
+        "legs": route_legs,
+        "encoded_polyline": route_result.get("encoded_polyline", ""),
+        "total_distance_meters": total_distance_meters,
         "travel_duration_seconds": total_travel_seconds,
         "planned_duration_seconds": int((return_arrival - departure).total_seconds()),
-        "raw": {"outbound": outbound, "return": inbound},
+        "raw": route_result.get("raw", {}),
     }
 
     return {

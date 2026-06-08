@@ -29,8 +29,10 @@ def initial_trip_state() -> TripState:
         "candidates": [],
         "candidate_index": 0,
         "validated_candidates": [],
-        "presented_candidate_index": 0,
-        "validated_destination": {},
+        "presented_candidate_indices": [],
+        "selected_destinations": [],
+        "max_destinations": 3,
+        "removal_notice": "",
         "validation_failures": [],
         "user_confirmed": False,
         "route": {},
@@ -97,27 +99,7 @@ def validate_until_destination(
         if current_index == previous_index and current_valid_count == previous_valid_count:
             break
 
-    validated_candidates = list(next_state.get("validated_candidates", []))
-    if not validated_candidates:
-        return apply_updates(
-            next_state,
-            {
-                "validated_destination": {},
-                "presented_candidate_index": 0,
-            },
-        )
-
-    presented_index = min(
-        int(next_state.get("presented_candidate_index", 0)),
-        len(validated_candidates) - 1,
-    )
-    return apply_updates(
-        next_state,
-        {
-            "presented_candidate_index": presented_index,
-            "validated_destination": validated_candidates[presented_index],
-        },
-    )
+    return next_state
 
 
 def run_candidate_discovery(
@@ -162,26 +144,41 @@ def run_final_formatter(
     return apply_updates(state, formatter(state))
 
 
-def request_next_candidate(
+def confirm_selection(
     state: TripState,
-    *,
-    validator: Callable[[TripState], dict[str, Any]] | None = None,
+    selected_indices: list[int],
 ) -> TripState:
-    _ = validator
-    validated_candidates = list(state.get("validated_candidates", []))
-    next_index = int(state.get("presented_candidate_index", 0)) + 1
-    next_destination = (
-        validated_candidates[next_index]
-        if next_index < len(validated_candidates)
-        else {}
-    )
+    """Write the candidates at `selected_indices` into `selected_destinations` and mark the trip confirmed."""
+    candidates = list(state.get("validated_candidates", []))
+    max_destinations = int(state.get("max_destinations", 3))
+    chosen = [
+        candidates[index]
+        for index in selected_indices
+        if 0 <= index < len(candidates)
+    ][:max_destinations]
     return apply_updates(
         state,
         {
-            "presented_candidate_index": next_index,
-            "validated_destination": next_destination,
-            "user_confirmed": False,
+            "selected_destinations": chosen,
+            "presented_candidate_indices": list(range(len(candidates))),
+            "user_confirmed": bool(chosen),
+            "removal_notice": "",
         },
+    )
+
+
+def load_more_candidates(
+    state: TripState,
+    *,
+    validator: Callable[[TripState], dict[str, Any]] | None = None,
+    batch_size: int = 3,
+) -> TripState:
+    """Validate more raw candidates into the `validated_candidates` queue so the user has additional options to pick from."""
+    current_count = len(state.get("validated_candidates", []))
+    return validate_until_destination(
+        state,
+        validator=validator,
+        target_count=current_count + batch_size,
     )
 
 
@@ -207,7 +204,7 @@ def _structured_validation_result(state: TripState) -> str:
         failure.get("severity") == "error"
         for failure in state.get("claim_failures", [])
     )
-    if has_error and state.get("validated_candidates"):
+    if has_error and state.get("selected_destinations"):
         return "n4_route"
     if not has_error:
         return "n6_composer"

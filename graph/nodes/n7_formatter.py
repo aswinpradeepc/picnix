@@ -61,8 +61,16 @@ def _waypoint_feature(entry: dict[str, Any]) -> dict[str, Any] | None:
     }
 
 
+SKIP_POINT_TYPES = {"departure"}
+
+
 def format_final_output(state: TripState) -> dict[str, Any]:
-    """Read verified `route`, `timeline`, and `itinerary_draft`, then write `final_geojson` and `final_itinerary` for the UI."""
+    """Read verified `route`, `timeline`, and `itinerary_draft`, then write `final_geojson` and `final_itinerary` for the UI.
+
+    Emits one Point feature per stop (plus start, return, and food markers), labelled "Stop N" by N4,
+    and a single LineString covering the full multi-stop route. "departure" (leave-stop) entries are
+    skipped so each stop renders one pin rather than two overlapping markers.
+    """
     features: list[dict[str, Any]] = []
 
     route_feature = _route_feature(dict(state.get("route", {})))
@@ -71,6 +79,8 @@ def format_final_output(state: TripState) -> dict[str, Any]:
 
     for entry in state.get("timeline", []):
         if not isinstance(entry, dict):
+            continue
+        if str(entry.get("type", "")) in SKIP_POINT_TYPES:
             continue
         waypoint = _waypoint_feature(entry)
         if waypoint:

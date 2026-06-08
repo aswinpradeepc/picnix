@@ -1,6 +1,6 @@
 # Picnix Project Status
 
-Last updated: 2026-06-08 (CS3 + UX fix: typed clarification inputs and combined choice/free-text answers; model upgrade to gemini-2.5-pro for N1/N4/N5)
+Last updated: 2026-06-08 (CS4: multi-destination selection — 1–3 stops chained into one route via a single waypoint call; scrollable multi-select card gallery in Streamlit)
 
 ## Source Of Truth
 
@@ -22,12 +22,12 @@ Last updated: 2026-06-08 (CS3 + UX fix: typed clarification inputs and combined 
 - N1 intent collection with Gemini through `ChatGoogleGenerativeAI` using Vertex AI ADC.
 - N2 short-trip candidate discovery with Google Geocoding and Places Nearby Search.
 - N3 destination validation with Places Details, opening-hours checks, markdown-backed known issue checks, and Routes travel-time checks.
-- N4 route builder with round-trip Routes calls, first-class dynamic food availability decisions, LLM-driven per-destination dwell time (20 min floor, math ceiling, reason in timeline notes), and departure-time-based timeline construction. (CS2)
-- N5 structured output validator with Python structural checks, Gemini semantic validation, claim failure state, and N5 error re-prompt state updates.
+- N4 route builder that chains `selected_destinations` (1–3 stops) into a single round trip via one Routes `computeRoutes` call with intermediate waypoints, builds one unified timeline across all stops, makes per-segment food decisions, and runs one batched LLM dwell-time call for all stops (20 min floor, math ceiling, reason in timeline notes). (CS2, CS4)
+- N5 structured output validator with Python structural checks (generalised to N stops), Gemini semantic validation, and claim failure state. On error it drops the unplannable stop from `selected_destinations` (with a user-facing `removal_notice`) and re-routes the remaining stops; routes to END only when none remain. (CS4)
 - N6 itinerary composer with one schema-constrained structured Gemini call, inline claim audit, and unverified-claim stripping before writing `itinerary_draft`.
-- N7 GeoJSON formatter that builds `final_geojson` from route/timeline and copies `itinerary_draft` to `final_itinerary`.
-- LangGraph wiring now runs `n4_route → n5_validator → n6_composer → n7_formatter → END`; N5 errors with remaining candidates route back to `n4_route` so the existing `interrupt_before` can re-prompt.
-- Streamlit demo for chat, validated destination selection, N5 re-prompt messaging, N4 route/timeline/food preview, N6 final itinerary text, and N7 Mapbox/pydeck route rendering.
+- N7 GeoJSON formatter that builds `final_geojson` from route/timeline (one Point per stop labelled "Stop N", full multi-stop LineString, leave-stop pins skipped) and copies `itinerary_draft` to `final_itinerary`. (CS4)
+- LangGraph wiring now runs `n4_route → n5_validator → n6_composer → n7_formatter → END`; N5 errors with surviving stops route back to `n4_route` to re-plan.
+- Streamlit demo for chat, a scrollable multi-select destination card gallery (checkbox per card, "Confirm selection" + "Load more options"), N5 stop-removal messaging, N4 route/timeline/food preview, N6 final itinerary text, and N7 Mapbox/pydeck route rendering. (CS4)
 - `agents.md` created at project root as the shared north star for all agents working on this project. (CS0)
 - Graph viz utility at `tools/graph_viz.py` exports `docs/graph.mmd` (and `docs/graph.png` if pygraphviz is installed) when `DEBUG=true`. (CS1)
 - N1 now emits `clarification_prompt: {question, input_type, options, allow_custom}` alongside each assistant message; `input_type` is one of `single_select`/`multi_select`/`text`. N1 asks exactly one question per round (no chained prose). Streamlit renders checkboxes (multi-select), radio (single-select), or a text box (text) accordingly, and always offers a free-text box so the user can combine a choice with extra context — both are merged into one labeled answer. Options sourced from `INTEREST_TYPE_MAP` keys in N2. (CS3 + UX fix)
@@ -53,7 +53,7 @@ Last updated: 2026-06-08 (CS3 + UX fix: typed clarification inputs and combined 
 N1–N7 graph nodes and Streamlit demo are complete. Remaining change sets are feature improvements and new graph nodes.
 
 - **CS3 ✓ done (+ UX fix)** — N1 emits a typed `clarification_prompt` dict; Streamlit renders the matching control (checkbox/radio/text) and merges a selected choice with optional free-text into one answer. The earlier known issue (free-form fields returned empty `options` and hid the input) is resolved: `text` input_type now renders a dedicated text box instead of being dropped.
-- **CS4** — Multi-destination selection (1–3 stops); `selected_destinations` list replaces `validated_destination`; N4 chains stops into one route.
+- **CS4 ✓ done** — Multi-destination selection (1–3 stops). `selected_destinations` (+ `max_destinations`, `presented_candidate_indices`, `removal_notice`) replaces `validated_destination`/`presented_candidate_index`. `gmaps.compute_route` gained `intermediates` → one `computeRoutes` call with waypoints + per-leg `normalized_legs`. N4 chains stops into one route/timeline with per-segment food; N5 drops the unplannable stop and re-plans the rest; N7 labels "Stop N". Streamlit shows a scrollable multi-select card gallery.
 - **CS5** — N8 plan editor: natural-language edits after itinerary is shown, routes back to N4.
 - **CS6** — Google Maps deep-link export after N7.
 - **CS7** — Bulleted itinerary format in N6.
@@ -69,3 +69,4 @@ N1–N7 graph nodes and Streamlit demo are complete. Remaining change sets are f
 - CS0+CS1: `agents.md` north star + graph viz utility (commit `3e08f9d`, 2026-06-08).
 - CS2: LLM-driven dwell time in N4 — single Gemini call, 20 min floor, math ceiling, reason in timeline notes (commit `3f30804`, 2026-06-08).
 - CS3 UX fix: typed clarification inputs (single_select/multi_select/text), one question per round, combined choice + free-text answers (commit `43047c7`, 2026-06-08).
+- CS4: multi-destination selection (1–3 stops) — single waypoint Routes call, per-segment food, N5 stop-removal/re-plan, scrollable multi-select card gallery (2026-06-08; commit hash backfilled with the next change set, per the convention above).

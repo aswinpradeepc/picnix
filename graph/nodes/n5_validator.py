@@ -233,22 +233,27 @@ def _check_time_arithmetic(
     if failures:
         return failures
 
-    by_type = {str(entry.get("type")): (minutes, entry) for minutes, entry in entries}
-    required_types = ("start", "destination", "return_departure", "return")
-    for entry_type in required_types:
+    by_type: dict[str, list[int]] = {}
+    for minutes, entry in entries:
+        by_type.setdefault(str(entry.get("type")), []).append(minutes)
+
+    for entry_type in ("start", "destination", "return"):
         if entry_type not in by_type:
             return [_failure("timeline", f"Timeline is missing a {entry_type} entry.")]
 
-    start_minutes = by_type["start"][0]
-    destination_minutes = by_type["destination"][0]
-    return_departure_minutes = by_type["return_departure"][0]
-    return_minutes = by_type["return"][0]
-    if start_minutes <= destination_minutes <= return_departure_minutes <= return_minutes:
+    start_minutes = min(by_type["start"])
+    return_minutes = max(by_type["return"])
+    destination_minutes = by_type["destination"]
+    if (
+        start_minutes <= min(destination_minutes)
+        and max(destination_minutes) <= return_minutes
+        and start_minutes <= return_minutes
+    ):
         return []
     return [
         _failure(
             "timeline",
-            "Timeline must satisfy departure <= destination arrival <= destination departure <= return arrival.",
+            "Timeline must satisfy departure <= each stop arrival <= return arrival.",
         )
     ]
 
@@ -347,7 +352,7 @@ def _check_coords_validity(state: TripState) -> list[dict[str, str]]:
             "timeline": state.get("timeline", []),
             "food_availability": state.get("food_availability", []),
             "food_stops": state.get("food_stops", []),
-            "validated_destination": state.get("validated_destination", {}),
+            "selected_destinations": state.get("selected_destinations", []),
             "route": state.get("route", {}),
         },
         "",
@@ -395,17 +400,20 @@ def _run_python_checks(state: TripState) -> tuple[list[dict[str, str]], dict[str
 
 
 def _semantic_summary(state: TripState) -> dict[str, Any]:
-    destination = state.get("validated_destination", {})
+    destinations = state.get("selected_destinations", [])
     return {
         "timeline": state.get("timeline", []),
         "food_availability": state.get("food_availability", []),
-        "validated_destination": {
-            "name": destination.get("name", ""),
-            "place_id": destination.get("place_id", ""),
-            "types": destination.get("types", []),
-            "primary_type": destination.get("primary_type", ""),
-            "coords": destination.get("coords", {}),
-        },
+        "selected_destinations": [
+            {
+                "name": destination.get("name", ""),
+                "place_id": destination.get("place_id", ""),
+                "types": destination.get("types", []),
+                "primary_type": destination.get("primary_type", ""),
+                "coords": destination.get("coords", {}),
+            }
+            for destination in destinations
+        ],
         "constraints": state.get("constraints", {}),
         "route": {
             "total_distance_meters": state.get("route", {}).get("total_distance_meters"),
@@ -434,48 +442,25 @@ def _run_semantic_pass(
     return _parse_semantic_failures(response.content)
 
 
-def _same_destination(first: dict[str, Any], second: dict[str, Any]) -> bool:
-    first_place_id = str(first.get("place_id", "")).strip()
-    second_place_id = str(second.get("place_id", "")).strip()
-    if first_place_id and second_place_id:
-        return first_place_id == second_place_id
-    first_name = str(first.get("name", "")).strip().lower()
-    second_name = str(second.get("name", "")).strip().lower()
-    return bool(first_name and second_name and first_name == second_name)
-
-
-def _remaining_candidates_after_rejection(state: TripState) -> list[dict[str, Any]]:
-    current_destination = dict(state.get("validated_destination", {}))
-    candidates = list(state.get("validated_candidates", []))
-    remaining = [
-        candidate
-        for candidate in candidates
-        if not _same_destination(candidate, current_destination)
-    ]
-    if len(remaining) != len(candidates):
-        return remaining
-
-    presented_index = int(state.get("presented_candidate_index", 0))
-    if 0 <= presented_index < len(candidates):
-        return [
-            candidate
-            for index, candidate in enumerate(candidates)
-            if index != presented_index
-        ]
-    return candidates
+def _first_error_issue(failures: list[dict[str, str]]) -> str:
+    for failure in failures:
+        if failure.get("severity") == "error" and failure.get("issue"):
+            return str(failure["issue"])
+    return "it could not be fit into a workable plan."
 
 
 def _error_updates(
     state: TripState,
     failures: list[dict[str, str]],
 ) -> dict[str, Any]:
-    remaining_candidates = _remaining_candidates_after_rejection(state)
+    """Drop the last selected stop (the one most likely overflowing the trip), and either retry N4 with the rest or end gracefully when none remain."""
+    selected = list(state.get("selected_destinations", []))
+    removed = selected[-1] if selected else None
+    remaining = selected[:-1]
+
     updates: dict[str, Any] = {
         "claim_failures": failures,
-        "validated_candidates": remaining_candidates,
-        "presented_candidate_index": 0,
-        "validated_destination": remaining_candidates[0] if remaining_candidates else {},
-        "user_confirmed": False,
+        "selected_destinations": remaining,
         "route_attempt_count": int(state.get("route_attempt_count", 0)) + 1,
         "route": {},
         "food_stops": [],
@@ -485,8 +470,20 @@ def _error_updates(
         "final_geojson": {},
         "final_itinerary": "",
     }
-    if not remaining_candidates:
+
+    if removed is not None:
+        removed_name = str(removed.get("name", "a selected stop"))
+        updates["removal_notice"] = (
+            f"Removed '{removed_name}' from your plan — {_first_error_issue(failures)}"
+        )
+
+    if remaining:
+        # Re-run N4 with the surviving stops.
+        updates["user_confirmed"] = True
+    else:
+        updates["user_confirmed"] = False
         updates["final_itinerary"] = GRACEFUL_FAILURE_MESSAGE
+
     return updates
 
 

@@ -11,12 +11,14 @@ class TripState(TypedDict):
     candidates: list[dict]            # Top 20 raw candidate destinations with coordinates, tags, distance, and ranking metadata.
     candidate_index: int              # Raw candidate cursor currently being validated.
 
-    validated_candidates: list[dict]  # Destinations confirmed usable after access, hours, and travel-time checks.
-    presented_candidate_index: int    # Index of the validated candidate currently shown to the user.
-    validated_destination: dict       # Current validated destination shown to the user.
+    validated_candidates: list[dict]  # Destinations confirmed usable after access, hours, and travel-time checks (the selectable queue).
+    presented_candidate_indices: list[int]  # Indices of validated candidates already shown to the user.
+    selected_destinations: list[dict] # The 1-3 destinations the user picked from the queue and confirmed.
+    max_destinations: int             # Maximum stops the user may select. Default 3.
+    removal_notice: str               # User-facing message when N5 drops a selected destination it could not plan.
     validation_failures: list[str]    # Diagnostic reasons raw destination candidates were rejected.
 
-    user_confirmed: bool              # True when the user accepts the destination; False when they request another option.
+    user_confirmed: bool              # True when the user confirms their selection; False when a re-selection is needed.
 
     route: dict                       # Full route data: GeoJSON route line, ordered waypoints, distances, legs, and ETAs.
     food_stops: list[dict]            # Validated restaurant or cafe stops selected along the route.

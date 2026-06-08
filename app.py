@@ -6,8 +6,9 @@ import pydeck as pdk
 import streamlit as st
 
 from graph.graph import (
+    confirm_selection,
     initial_trip_state,
-    request_next_candidate,
+    load_more_candidates,
     run_candidate_discovery,
     run_final_formatter,
     run_intent_turn,
@@ -15,6 +16,9 @@ from graph.graph import (
     run_route_builder,
     run_structured_validator,
 )
+
+
+MAX_REPLAN_ATTEMPTS = 3
 from tools.mapbox import get_mapbox_token
 
 
@@ -48,16 +52,6 @@ def destination_empty_message(state: dict) -> str:
     return "Once Picnix validates a destination, it will appear here."
 
 
-def destination_prompt_message(state: dict) -> str:
-    if (
-        int(state.get("route_attempt_count", 0)) > 0
-        and not bool(state.get("user_confirmed"))
-        and state.get("validated_destination")
-    ):
-        return "That destination couldn't be fully planned - here are the remaining options."
-    return ""
-
-
 def timeline_rows(timeline: list[dict]) -> list[dict]:
     return [
         {
@@ -80,10 +74,6 @@ def food_availability_rows(food_availability: list[dict]) -> list[dict]:
         }
         for entry in food_availability
     ]
-
-
-def show_destination_actions(state: dict) -> bool:
-    return not bool(state.get("user_confirmed"))
 
 
 def has_error_claims(state: dict) -> bool:
@@ -142,9 +132,17 @@ def run_confirmed_destination_pipeline(
     composer_runner: Callable[[dict], dict] = run_itinerary_composer,
     formatter_runner: Callable[[dict], dict] = run_final_formatter,
 ) -> dict:
-    next_state = route_runner(state)
-    next_state = validator_runner(next_state)
-    if not next_state.get("user_confirmed") or has_error_claims(next_state):
+    """Build and validate the multi-stop route, dropping any unplannable stop and re-routing
+    the remaining ones (N5 keeps `user_confirmed` true while stops survive), then compose."""
+    next_state = state
+    for _ in range(MAX_REPLAN_ATTEMPTS):
+        next_state = route_runner(next_state)
+        next_state = validator_runner(next_state)
+        if not has_error_claims(next_state):
+            break
+        if not next_state.get("selected_destinations"):
+            break
+    if not next_state.get("selected_destinations") or has_error_claims(next_state):
         return next_state
     next_state = composer_runner(next_state)
     return formatter_runner(next_state)
@@ -222,94 +220,102 @@ def handle_user_message(user_message: str) -> None:
             st.session_state.graph_state = run_candidate_discovery(st.session_state.graph_state)
 
 
-def render_destination_panel() -> None:
-    destination = st.session_state.graph_state.get("validated_destination", {})
-    if not destination:
-        if st.session_state.graph_state.get("final_itinerary"):
-            st.error(st.session_state.graph_state["final_itinerary"])
-            return
-        st.info(destination_empty_message(st.session_state.graph_state))
+def render_selection_gallery(state: dict) -> None:
+    """Scrollable gallery of validated candidates, each a card with a checkbox for multi-select."""
+    candidates = state.get("validated_candidates", [])
+    if not candidates:
+        st.info(destination_empty_message(state))
         return
 
-    prompt_message = destination_prompt_message(st.session_state.graph_state)
-    if prompt_message:
-        st.warning(prompt_message)
+    max_destinations = int(state.get("max_destinations", 3))
+    st.subheader("Choose your stops")
+    st.caption(f"Pick 1 to {max_destinations} places — Picnix chains them into one trip.")
 
-    summary = destination_summary(destination)
-    st.subheader(summary["name"])
-    cols = st.columns(2)
-    cols[0].metric("Distance", summary["distance"])
-    cols[1].metric("Travel time", summary["duration"])
-    st.write(summary["description"])
-    for note in summary["notes"]:
-        st.info(note)
+    selected_indices: list[int] = []
+    with st.container(height=420):
+        for index, destination in enumerate(candidates):
+            summary = destination_summary(destination)
+            with st.container(border=True):
+                checked = st.checkbox(summary["name"], key=f"select_dest_{index}")
+                st.caption(f"📍 {summary['distance']}  ·  🕒 {summary['duration']}")
+                st.write(summary["description"])
+                for note in summary["notes"]:
+                    st.info(note)
+            if checked:
+                selected_indices.append(index)
 
-    validated_candidates = st.session_state.graph_state.get("validated_candidates", [])
-    presented_index = int(st.session_state.graph_state.get("presented_candidate_index", 0))
-    has_next_candidate = presented_index + 1 < len(validated_candidates)
-
-    if show_destination_actions(st.session_state.graph_state):
-        yes_col, another_col = st.columns(2)
-        if yes_col.button("Yes, plan this!", use_container_width=True):
-            accepted_state = {
-                **st.session_state.graph_state,
-                "user_confirmed": True,
-            }
-            with st.spinner("Building, validating, and writing the itinerary..."):
-                st.session_state.graph_state = run_confirmed_destination_pipeline(
-                    accepted_state
-                )
-            if st.session_state.graph_state.get("final_itinerary"):
-                st.session_state.partial_demo_notice = "Plan ready."
-            else:
-                st.session_state.partial_demo_notice = ""
-            st.rerun()
-        if another_col.button(
-            "Show me another",
-            disabled=not has_next_candidate,
-            use_container_width=True,
-        ):
-            with st.spinner("Checking the next validated option..."):
-                st.session_state.graph_state = request_next_candidate(st.session_state.graph_state)
-            st.rerun()
-        if not has_next_candidate:
-            st.caption("No more validated suggestions are queued for this trip window.")
-    else:
-        st.caption(
-            "Destination confirmed. The validated suggestion controls are hidden for this trip."
+    over_limit = len(selected_indices) > max_destinations
+    if over_limit:
+        st.warning(
+            f"Please pick at most {max_destinations} stops — you selected {len(selected_indices)}."
         )
 
+    confirm_col, more_col = st.columns(2)
+    confirm = confirm_col.button(
+        "Confirm selection",
+        use_container_width=True,
+        disabled=not selected_indices or over_limit,
+    )
+    load_more = more_col.button("Load more options", use_container_width=True)
+
+    if confirm:
+        confirmed_state = confirm_selection(state, selected_indices)
+        with st.spinner("Building, validating, and writing the itinerary..."):
+            st.session_state.graph_state = run_confirmed_destination_pipeline(confirmed_state)
+        st.session_state.partial_demo_notice = (
+            "Plan ready." if st.session_state.graph_state.get("final_itinerary") else ""
+        )
+        st.rerun()
+
+    if load_more:
+        with st.spinner("Validating more options..."):
+            st.session_state.graph_state = load_more_candidates(state)
+        st.rerun()
+
+
+def render_plan(state: dict) -> None:
+    """Render the confirmed multi-stop itinerary, route metrics, timeline, and food."""
     if st.session_state.partial_demo_notice:
         st.success(st.session_state.partial_demo_notice)
 
-    final_itinerary = st.session_state.graph_state.get("final_itinerary", "")
+    final_itinerary = state.get("final_itinerary", "")
     if final_itinerary:
-        st.divider()
         st.subheader("Itinerary")
         st.markdown(final_itinerary)
 
-    route = st.session_state.graph_state.get("route", {})
+    route = state.get("route", {})
     if route:
         st.divider()
         st.subheader("Route")
         route_cols = st.columns(2)
-        route_cols[0].metric(
-            "Round trip",
-            format_km(route.get("total_distance_meters")),
-        )
+        route_cols[0].metric("Round trip", format_km(route.get("total_distance_meters")))
         route_cols[1].metric(
             "Planned duration",
             format_duration(route.get("planned_duration_seconds")),
         )
-        rows = timeline_rows(st.session_state.graph_state.get("timeline", []))
+        rows = timeline_rows(state.get("timeline", []))
         if rows:
             st.table(rows)
-        food_rows = food_availability_rows(
-            st.session_state.graph_state.get("food_availability", [])
-        )
+        food_rows = food_availability_rows(state.get("food_availability", []))
         if food_rows:
             st.subheader("Food")
             st.table(food_rows)
+
+
+def render_destination_panel() -> None:
+    state = st.session_state.graph_state
+    removal_notice = state.get("removal_notice", "")
+    if removal_notice:
+        st.warning(removal_notice)
+
+    if state.get("user_confirmed") and state.get("route"):
+        render_plan(state)
+        return
+
+    if state.get("final_itinerary") and not state.get("route"):
+        st.error(state["final_itinerary"])
+
+    render_selection_gallery(state)
 
 
 def render_trip_map(final_geojson: dict) -> None:

@@ -268,38 +268,50 @@ def get_place_details(
     return details
 
 
+def _waypoint(point: dict[str, float]) -> dict[str, Any]:
+    return {
+        "location": {
+            "latLng": {
+                "latitude": point["lat"],
+                "longitude": point["lng"],
+            }
+        }
+    }
+
+
+def _normalize_leg(leg: dict[str, Any]) -> dict[str, Any]:
+    duration = leg.get("duration", "")
+    return {
+        "distance_meters": leg.get("distanceMeters", 0),
+        "duration": duration,
+        "duration_seconds": _duration_to_seconds(duration),
+        "encoded_polyline": leg.get("polyline", {}).get("encodedPolyline", ""),
+    }
+
+
 def compute_route(
     *,
     origin: dict[str, float],
     destination: dict[str, float],
     settings: Settings = SETTINGS,
     travel_mode: str = "DRIVE",
+    intermediates: list[dict[str, float]] | None = None,
 ) -> dict[str, Any]:
+    json_body: dict[str, Any] = {
+        "origin": _waypoint(origin),
+        "destination": _waypoint(destination),
+        "travelMode": travel_mode,
+        "routingPreference": "TRAFFIC_AWARE",
+    }
+    if intermediates:
+        json_body["intermediates"] = [_waypoint(point) for point in intermediates]
+
     payload = maps_request(
         "POST",
         ROUTES_URL,
         settings=settings,
         field_mask=ROUTES_FIELD_MASK,
-        json_body={
-            "origin": {
-                "location": {
-                    "latLng": {
-                        "latitude": origin["lat"],
-                        "longitude": origin["lng"],
-                    }
-                }
-            },
-            "destination": {
-                "location": {
-                    "latLng": {
-                        "latitude": destination["lat"],
-                        "longitude": destination["lng"],
-                    }
-                }
-            },
-            "travelMode": travel_mode,
-            "routingPreference": "TRAFFIC_AWARE",
-        },
+        json_body=json_body,
     )
 
     routes = payload.get("routes") or []
@@ -308,12 +320,14 @@ def compute_route(
 
     route = routes[0]
     duration = route.get("duration", "")
+    raw_legs = route.get("legs", [])
     return {
         "distance_meters": route.get("distanceMeters", 0),
         "duration": duration,
         "duration_seconds": _duration_to_seconds(duration),
         "encoded_polyline": route.get("polyline", {}).get("encodedPolyline", ""),
-        "legs": route.get("legs", []),
+        "legs": raw_legs,
+        "normalized_legs": [_normalize_leg(leg) for leg in raw_legs],
         "raw": route,
     }
 

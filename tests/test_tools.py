@@ -271,6 +271,14 @@ def test_compute_route_normalizes_routes_response(monkeypatch) -> None:
         "duration_seconds": 1869,
         "encoded_polyline": "encoded-route",
         "legs": [{"distanceMeters": 17047, "duration": "1869s"}],
+        "normalized_legs": [
+            {
+                "distance_meters": 17047,
+                "duration": "1869s",
+                "duration_seconds": 1869,
+                "encoded_polyline": "",
+            }
+        ],
         "raw": {
             "distanceMeters": 17047,
             "duration": "1869s",
@@ -278,6 +286,45 @@ def test_compute_route_normalizes_routes_response(monkeypatch) -> None:
             "legs": [{"distanceMeters": 17047, "duration": "1869s"}],
         },
     }
+
+
+def test_compute_route_passes_intermediate_waypoints(monkeypatch) -> None:
+    from tools import gmaps
+
+    captured: dict = {}
+
+    def fake_request(method, url, **kwargs):
+        captured["body"] = kwargs["json"]
+        return FakeResponse(
+            {
+                "routes": [
+                    {
+                        "distanceMeters": 30000,
+                        "duration": "3600s",
+                        "polyline": {"encodedPolyline": "full-route"},
+                        "legs": [
+                            {"distanceMeters": 10000, "duration": "1200s", "polyline": {"encodedPolyline": "leg-a"}},
+                            {"distanceMeters": 10000, "duration": "1200s", "polyline": {"encodedPolyline": "leg-b"}},
+                            {"distanceMeters": 10000, "duration": "1200s", "polyline": {"encodedPolyline": "leg-c"}},
+                        ],
+                    }
+                ]
+            }
+        )
+
+    monkeypatch.setattr(gmaps.requests, "request", fake_request)
+
+    route = gmaps.compute_route(
+        origin={"lat": 9.9, "lng": 76.2},
+        destination={"lat": 9.9, "lng": 76.2},
+        settings=make_settings(),
+        intermediates=[{"lat": 10.0, "lng": 76.3}, {"lat": 10.1, "lng": 76.4}],
+    )
+
+    assert len(captured["body"]["intermediates"]) == 2
+    assert captured["body"]["intermediates"][0]["location"]["latLng"]["latitude"] == 10.0
+    assert len(route["normalized_legs"]) == 3
+    assert route["normalized_legs"][1]["encoded_polyline"] == "leg-b"
 
 
 def test_food_stop_search_uses_search_along_route_parameters(monkeypatch) -> None:

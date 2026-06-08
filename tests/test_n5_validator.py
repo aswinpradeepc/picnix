@@ -44,13 +44,21 @@ def base_state() -> dict:
                 "types": ["tourist_attraction"],
             },
         ],
-        "presented_candidate_index": 0,
-        "validated_destination": {
-            "place_id": "dest-1",
-            "name": "Athirappilly Falls",
-            "coords": {"lat": 10.2859, "lng": 76.5696},
-            "types": ["tourist_attraction"],
-        },
+        "presented_candidate_indices": [0, 1],
+        "selected_destinations": [
+            {
+                "place_id": "dest-1",
+                "name": "Athirappilly Falls",
+                "coords": {"lat": 10.2859, "lng": 76.5696},
+                "types": ["tourist_attraction"],
+            },
+            {
+                "place_id": "dest-2",
+                "name": "Fort Kochi",
+                "coords": {"lat": 9.9657, "lng": 76.2428},
+                "types": ["tourist_attraction"],
+            },
+        ],
         "user_confirmed": True,
         "route_attempt_count": 1,
         "route": {
@@ -222,7 +230,7 @@ def test_validator_preserves_semantic_warning_only() -> None:
     assert isinstance(model.invocations[0][1], HumanMessage)
 
 
-def test_validator_error_removes_current_destination_and_increments_attempt_count() -> None:
+def test_validator_error_removes_last_stop_and_replans_remaining() -> None:
     model = FakeModel(
         [
             {
@@ -235,17 +243,30 @@ def test_validator_error_removes_current_destination_and_increments_attempt_coun
 
     result = validate_structured_output(base_state(), model=model)
 
-    assert result["validated_candidates"] == [
-        {
-            "place_id": "dest-2",
-            "name": "Fort Kochi",
-            "coords": {"lat": 9.9657, "lng": 76.2428},
-            "types": ["tourist_attraction"],
-        }
-    ]
-    assert result["validated_destination"]["place_id"] == "dest-2"
-    assert result["presented_candidate_index"] == 0
-    assert result["user_confirmed"] is False
+    # The last selected stop is dropped; the rest survive for a re-plan.
+    assert [dest["place_id"] for dest in result["selected_destinations"]] == ["dest-1"]
+    assert result["user_confirmed"] is True
+    assert "Fort Kochi" in result["removal_notice"]
     assert result["route_attempt_count"] == 2
     assert result["route"] == {}
     assert result["timeline"] == []
+
+
+def test_validator_error_ends_gracefully_when_no_stops_remain() -> None:
+    model = FakeModel(
+        [
+            {
+                "field": "timeline",
+                "issue": "Destination dwell time is implausibly short.",
+                "severity": "error",
+            }
+        ]
+    )
+    state = base_state()
+    state["selected_destinations"] = [state["selected_destinations"][0]]
+
+    result = validate_structured_output(state, model=model)
+
+    assert result["selected_destinations"] == []
+    assert result["user_confirmed"] is False
+    assert result["final_itinerary"]
