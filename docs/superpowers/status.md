@@ -47,6 +47,13 @@ Last updated: 2026-06-08 (CS4: multi-destination selection — 1–3 stops chain
 - `docs/adr/` — formal ADRs for all significant architectural decisions. Read before implementing new nodes or changing the graph shape.
 - ADR-001 through ADR-005: retroactive records for LangGraph, Vertex AI, candidate limits, interrupt placement, and dynamic food search.
 - ADR-006: N5/N6 swap — validate structured N4 output before composing prose. Includes N5→N4 re-prompt loop design.
+- ADR-007: Multi-destination routing & stop selection (CS4) — single `computeRoutes` call with intermediate waypoints; current visit order = candidate-list order (no optimization); current removal = N5 auto-drops the last stop. Deferred revisits documented in `docs/future-scope.md` (FS-1 stop order, FS-2 user-driven removal).
+
+## Deferred Discussions (Future Scope)
+
+- `docs/future-scope.md` — agreed-to-revisit design discussions that are intentionally **not** scheduled into a change set yet.
+- **FS-1** — Visit order of selected stops (geo-optimize vs. user-controlled vs. current candidate-list order).
+- **FS-2** — User-driven stop removal: when a plan does not fit, show the stops with distance / travel time / time-spent and let the user choose what to remove (replaces the current auto-drop-last behavior).
 
 ## Designed But Not Yet Implemented
 
