@@ -13,7 +13,7 @@ CS5 adds natural-language plan editing: after the final itinerary is shown, the 
 N7 → N8 is an **unconditional** edge and the graph compiles with `interrupt_before=["n4_route", "n8_editor"]`. Every completed plan parks the thread at the `n8_editor` interrupt; that pause *is* the "itinerary shown, awaiting possible edit" state. A user who is happy never resumes, and the thread stays parked — fine for a local MemorySaver app. The rejected alternative, "N7 → N8 conditional on `plan_edit_mode`", is unimplementable: on first completion `plan_edit_mode` is `False`, the run reaches END, and there is nothing left to resume into N8. The only END paths are now N5's no-stops-left path and the multiday dead end.
 
 **2. Closed-universe edits; on-demand validation deferred (FS-3).**
-N8 may only place destinations drawn from `selected_destinations` ∪ `validated_candidates` (keyed by `place_id`). Requests outside that pool are reported back as unfulfilled ("not in the validated pool for this trip"), never invented and never silently substituted. Wiring N8 → N3 for on-demand validation is a graph-topology change deferred as **FS-3** in `docs/future-scope.md`.
+N8 may only place destinations drawn from `selected_destinations` ∪ `validated_candidates` (keyed by `place_id`). Requests outside that pool are reported back as unfulfilled ("not in the validated pool for this trip"), never invented and never silently substituted. Food planning is likewise out of N8's reach: `food_stops`/`food_availability` are re-derived by N4 each re-plan, so a named food spot cannot be honored either. Both gaps are deferred as **FS-3** in `docs/future-scope.md` (on-demand validation for edit-requested places + user-pinned food stops that N4 respects).
 
 **3. IDs-only LLM contract.**
 N8's single `gemini-3.1-pro-preview` call returns place **IDs** selected from a closed set, plus optional timing changes, under an enforced `response_schema` (`response_mime_type="application/json"` **and** `response_schema`, the same enforcement as the N6 prose fix). Python (`apply_edit_result`, a pure function) maps IDs back to the real destination dicts, drops unknown IDs, falls back to the unchanged plan when the result is empty or exceeds `max_destinations` (an empty list would trigger N5's END path and kill the session), validates `HH:MM` / `0 < duration_hours ≤ 14`, resets the same route artifacts N5's replan path resets, and appends `edit_history`. The LLM never authors a destination object.
@@ -25,7 +25,7 @@ N8's single `gemini-3.1-pro-preview` call returns place **IDs** selected from a 
 
 - **Conditional N7 → END + resume into N8** — rejected; see Decision 1.
 - **Second "confirm the edit" interrupt between typing and N8** — rejected; the submission is the confirmation, and the extra pause had no UI to drive it.
-- **N8 → N3 re-entry for unknown places** — deferred (FS-3); far beyond this change set's topology budget.
+- **On-demand validation for unknown places and user-named food stops** (N8 → N3 re-entry or targeted validation helpers) — deferred (FS-3); far beyond this change set's topology budget.
 - **Keeping app.py's manual node-pipeline style** — rejected by the user in favor of driving the compiled graph, making the documented topology, interrupts, and this ADR true at runtime rather than simulated.
 
 ## Consequences

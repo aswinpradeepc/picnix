@@ -216,41 +216,17 @@ This is the largest change. Read the full spec before starting.
 
 ---
 
-## Change Set 5 — Plan rework (N8 Plan Editor)
+## Change Set 5 — Plan rework (N8 Plan Editor) — ✓ done, superseded by cs5.md v2
 
-**Goal:** After the itinerary is shown, allow the user to edit it in natural language — add/remove stops, change timing — and re-run N4 onwards.
-
-**Files to change:** `graph/state.py`, `graph/graph.py`, new file `graph/nodes/n8_editor.py`, `app.py`
-
-**State changes** (`graph/state.py`):
-- Add `plan_edit_mode: bool` — True when the user is editing an existing plan
-- Add `edit_instruction: str` — the user's raw edit request ("remove the waterfall, add a café near the beach")
-- Add `edit_history: list[dict]` — log of `{instruction, timestamp, resulting_destinations}`
-
-**N8 node** (`graph/nodes/n8_editor.py`):
-```
-Reads from state: edit_instruction, selected_destinations, validated_candidates, constraints
-Writes to state: selected_destinations (updated), plan_edit_mode, edit_history (appended)
-```
-- LLM node (single call)
-- Given `edit_instruction` and current `selected_destinations`, determine the updated destination list
-- If the instruction adds a new stop: search `validated_candidates` first before requesting new validation
-- If the instruction removes a stop: remove it from `selected_destinations`
-- If the instruction changes timing: update `constraints["departure_time"]` or `constraints["duration_hours"]`
-- Write updated `selected_destinations` back to state
-- Append to `edit_history`
-- Reset `route_attempt_count = 0`, `user_confirmed = True`
-- Route to N4 to rebuild the route
-
-**Graph wiring** (`graph/graph.py`):
-- Add N8 node after N7
-- Add human interrupt before N8 (user must confirm the edit before re-running)
-- Add edge: N8 → N4
-- N7 → N8 is conditional: only if `plan_edit_mode == True`
-
-**App changes** (`app.py`):
-- After final itinerary is displayed, show a text input: "Want to change anything? Describe it."
-- On submit: set `edit_instruction` in state, set `plan_edit_mode = True`, resume graph
+The original CS5 section that lived here had four ambiguities (conditional N7→N8, a
+second "confirm the edit" interrupt, an undefined "request new validation" mechanism,
+and no output contract for the N8 LLM call) and was replaced by the **`cs5.md` (v2)**
+spec, which is the authoritative record of what was built: unconditional N7→N8 with a
+park-at-`n8_editor` interrupt, closed-universe IDs-only edits, and an app-side
+auto-resume rule for the N4 interrupt. Implemented 2026-06-10 on branch
+`cs5-n8-plan-editor`; decisions recorded in `docs/adr/ADR-008-n8-plan-editor.md`.
+On-demand validation of edit-requested places and user-directed food edits are
+deferred as **FS-3** in `docs/future-scope.md`.
 
 ---
 

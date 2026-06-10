@@ -62,24 +62,31 @@ Status legend: **Deferred** = agreed to revisit later; **Open** = no decision ye
 
 ---
 
-## FS-3 — On-demand validation for edit-requested places
+## FS-3 — Edit-time additions: on-demand place validation + user-directed food stops
 
-**Status:** Deferred. Current behavior accepted for now (see ADR-008).
+**Status:** Deferred, scope agreed 2026-06-10. Current behavior accepted for now (see ADR-008).
 
 **Current behavior (as of CS5):**
 - N8 plan edits draw from a **closed universe**: `selected_destinations` ∪ `validated_candidates`, keyed by `place_id`.
-- An edit asking for a place or category outside that pool (e.g. "add Athirappilly" when it was never validated) is **not fulfilled**. N8 records it in the edit's `unfulfilled` list with reason "not in the validated pool for this trip", surfaces it via `edit_notice`, and leaves the rest of the edit applied. Nothing is invented and the user is never silently switched.
+- An edit asking for a place or category outside that pool (e.g. "add Kadamakudy lake view point" when it was never validated) is **not fulfilled**. N8 records it in the edit's `unfulfilled` list with reason "not in the validated pool for this trip", surfaces it via `edit_notice`, and leaves the rest of the edit applied. Nothing is invented and the user is never silently switched.
+- Food planning is entirely N4's: `food_stops` / `food_availability` are re-derived from the route geometry on every re-plan. N8 cannot honor "have dinner at Pathirakozhi, Kalamassery" even when the restaurant is real and on the route — food requests are reported as unfulfilled like any out-of-pool place.
 
 **Problem:**
 - The validated pool only contains what N2/N3 fetched for the original constraints. Perfectly plannable places the user names mid-edit are rejected simply because they were never run through validation.
+- Users know specific food spots they want; a food edit that can only say "couldn't do it" undercuts the editor for one of the most common real requests.
 
-**Options to consider:**
-1. **N8 → N3 re-entry.** Route unfulfilled place requests back through the existing validation node, then re-run the edit. Reuses N3 wholesale but is a graph-topology change (a cycle into the N3 loop from the edit path) and re-opens the N4 interrupt dispatch rules.
-2. **Targeted single-place validation call from N8's enforcement step.** A bounded "validate exactly this place" helper (Places text search + hours + travel-time check) invoked only for named places, keeping the graph shape unchanged. Violates the current "N8 is LLM + state surgery only" rule, so the rule would need amending.
+**Agreed direction (to spec when promoted to a change set):**
+1. **New places can be added to the trip via edits.** When an edit names a place outside the pool, resolve it (Places text search) and run it through the same checks N3 applies (opening hours during the window, travel time, known issues). If it passes, add it to the plan **and** to `validated_candidates` so later edits can reuse it; if it fails, tell the user exactly why instead of "not in the validated pool".
+2. **Food edits update the food plan.** A food-place edit ("dinner at Pathirakozhi, Kalamassery") validates the named food place and **pins** it into the food plan for that meal, overriding N4's route-derived choice. N4 must respect pinned food stops on every subsequent re-plan (likely a new state field, e.g. `pinned_food_stops`, that `_plan_food_availability` consults before searching the route).
+
+**Options to consider for the mechanism:**
+1. **N8 → N3 re-entry.** Route unfulfilled place requests back through the existing validation node, then re-run the edit. Reuses N3 wholesale but is a graph-topology change (a cycle into the N3 loop from the edit path) and re-opens the N4 interrupt dispatch rules. Does not cover food stops (N3 validates destinations, not meals).
+2. **Targeted validation helpers called from N8's enforcement step.** Bounded "validate exactly this place" / "validate exactly this food stop" helpers (Places text search + hours + travel-time check) invoked only for named places, keeping the graph shape unchanged. Amends the current "N8 is LLM + state surgery only" rule (ADR-008), so the ADR needs an update when this ships. Covers both new stops and pinned food stops with one mechanism.
 
 **Open questions:**
-- How to resolve a free-text place name to a `place_id` safely (text search ranking vs. asking the user to confirm)?
-- Does a newly validated place join `validated_candidates` permanently for later edits?
+- How to resolve a free-text place name to a `place_id` safely (text search ranking vs. asking the user to confirm among top matches)?
+- For pinned food stops: what happens when the pinned place is closed at the meal time or too far off the route — refuse the pin with a reason, or accept and warn?
+- Does a pinned food stop survive a stop-removal replan (N5 drops a destination and N4 re-derives food)?
 
 ---
 

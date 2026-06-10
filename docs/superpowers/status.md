@@ -57,7 +57,7 @@ Last updated: 2026-06-10 (CS5: N8 plan editor — natural-language edits re-plan
 - `docs/future-scope.md` — agreed-to-revisit design discussions that are intentionally **not** scheduled into a change set yet.
 - **FS-1** — Visit order of selected stops (geo-optimize vs. user-controlled vs. current candidate-list order).
 - **FS-2** — User-driven stop removal: when a plan does not fit, show the stops with distance / travel time / time-spent and let the user choose what to remove (replaces the current auto-drop-last behavior).
-- **FS-3** — On-demand validation for edit-requested places: N8 → N3 re-entry or a targeted single-place validation call, so "add Athirappilly" works when it isn't in the validated pool.
+- **FS-3** — Edit-time additions: validate edit-requested places on demand (so "add Kadamakudy lake view point" works when it isn't in the validated pool, and the place joins `validated_candidates`) and let food edits pin a user-named food stop ("dinner at Pathirakozhi, Kalamassery") that N4 respects on re-plans.
 
 ## Designed But Not Yet Implemented
 
@@ -65,7 +65,7 @@ N1–N7 graph nodes and Streamlit demo are complete. Remaining change sets are f
 
 - **CS3 ✓ done (+ UX fix)** — N1 emits a typed `clarification_prompt` dict; Streamlit renders the matching control (checkbox/radio/text) and merges a selected choice with optional free-text into one answer. The earlier known issue (free-form fields returned empty `options` and hid the input) is resolved: `text` input_type now renders a dedicated text box instead of being dropped.
 - **CS4 ✓ done** — Multi-destination selection (1–3 stops). `selected_destinations` (+ `max_destinations`, `presented_candidate_indices`, `removal_notice`) replaces `validated_destination`/`presented_candidate_index`. `gmaps.compute_route` gained `intermediates` → one `computeRoutes` call with waypoints + per-leg `normalized_legs`. N4 chains stops into one route/timeline with per-segment food; N5 drops the unplannable stop and re-plans the rest; N7 labels "Stop N". Streamlit shows a scrollable multi-select card gallery.
-- **CS5 ✓ done** — N8 plan editor (cs5.md v2 spec): park-at-N8 interrupt, closed-universe IDs-only edits, app-side auto-resume of the N4 interrupt; FS-3 (on-demand validation for out-of-pool places) deferred. Recorded in ADR-008.
+- **CS5 ✓ done** — N8 plan editor (cs5.md v2 spec): park-at-N8 interrupt, closed-universe IDs-only edits, app-side auto-resume of the N4 interrupt; FS-3 (edit-time place additions + user-directed food stops) deferred. Recorded in ADR-008.
 - **CS6** — Google Maps deep-link export after N7.
 - **CS7** — Bulleted itinerary format in N6.
 - **CS8** — Region-agnostic: remove Kerala/India-specific strings from code and prompts.
