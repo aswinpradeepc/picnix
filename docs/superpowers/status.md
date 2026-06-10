@@ -1,6 +1,6 @@
 # Picnix Project Status
 
-Last updated: 2026-06-10 (CS5: N8 plan editor — natural-language edits re-plan from N4 onward via a park-at-N8 interrupt; app.py now drives the compiled graph; reasoning slots upgraded to gemini-3.1-pro-preview)
+Last updated: 2026-06-10 (CS8: region-agnostic — all next_milestone.md change sets CS0–CS8 complete; AI layer MVP shipped)
 
 ## Source Of Truth
 
@@ -34,6 +34,9 @@ Last updated: 2026-06-10 (CS5: N8 plan editor — natural-language edits re-plan
 - Graph viz utility at `tools/graph_viz.py` exports `docs/graph.mmd` (and `docs/graph.png` if pygraphviz is installed) when `DEBUG=true`. (CS1)
 - N1 now emits `clarification_prompt: {question, input_type, options, allow_custom}` alongside each assistant message; `input_type` is one of `single_select`/`multi_select`/`text`. N1 asks exactly one question per round (no chained prose). Streamlit renders checkboxes (multi-select), radio (single-select), or a text box (text) accordingly, and always offers a free-text box so the user can combine a choice with extra context — both are merged into one labeled answer. Options sourced from `INTEREST_TYPE_MAP` keys in N2. (CS3 + UX fix)
 - Reasoning slots — N1, N4 (dwell time call), N5 (semantic validation pass), and N8 (plan editor) — run `gemini-3.1-pro-preview` (`REASONING_GEMINI_MODEL`) with `temperature=1.0`; N6 remains on `gemini-2.5-flash`. Requires `GOOGLE_CLOUD_LOCATION=global` (3.1 Pro is global-endpoint only; 3 Pro preview was discontinued 2026-03).
+- Google Maps deep-link export: `tools/gmaps.py` `generate_gmaps_link(timeline)` builds a round-trip URL (origin=start, destination=start, waypoints=all destination stops); rendered as `st.link_button("Open in Google Maps 🗺️")` after the final itinerary. (CS6)
+- N6 itinerary format updated to hybrid: one bold section header per stop + one punchy vibe sentence + 1–2 bullet points for must-know facts. (CS7)
+- Region-agnostic: N6 system prompt removes "Kerala local" identity and Malayalam warmth phrases; replaced with a locally neutral tone instruction. `docs/known-place-issues.md` cleared of Kerala-specific entries and given a region-agnostic header. `README.md` updated to remove Kerala reference. (CS8)
 
 ## Current Fixed Limits
 
@@ -66,9 +69,12 @@ N1–N7 graph nodes and Streamlit demo are complete. Remaining change sets are f
 - **CS3 ✓ done (+ UX fix)** — N1 emits a typed `clarification_prompt` dict; Streamlit renders the matching control (checkbox/radio/text) and merges a selected choice with optional free-text into one answer. The earlier known issue (free-form fields returned empty `options` and hid the input) is resolved: `text` input_type now renders a dedicated text box instead of being dropped.
 - **CS4 ✓ done** — Multi-destination selection (1–3 stops). `selected_destinations` (+ `max_destinations`, `presented_candidate_indices`, `removal_notice`) replaces `validated_destination`/`presented_candidate_index`. `gmaps.compute_route` gained `intermediates` → one `computeRoutes` call with waypoints + per-leg `normalized_legs`. N4 chains stops into one route/timeline with per-segment food; N5 drops the unplannable stop and re-plans the rest; N7 labels "Stop N". Streamlit shows a scrollable multi-select card gallery.
 - **CS5 ✓ done** — N8 plan editor (cs5.md v2 spec): park-at-N8 interrupt, closed-universe IDs-only edits, app-side auto-resume of the N4 interrupt; FS-3 (edit-time place additions + user-directed food stops) deferred. Recorded in ADR-008.
-- **CS6** — Google Maps deep-link export after N7.
-- **CS7** — Bulleted itinerary format in N6.
-- **CS8** — Region-agnostic: remove Kerala/India-specific strings from code and prompts.
+- **CS6 ✓ done** — Google Maps deep-link export after N7.
+- **CS7 ✓ done** — Hybrid itinerary format in N6 (bold header + vibe sentence + bullets).
+- **CS8 ✓ done** — Region-agnostic: Kerala/India-specific strings removed from code, prompts, and docs.
+
+All next_milestone.md change sets (CS0–CS8) are complete. The AI layer MVP is shipped.
+
 - Future-scope items from `design-context.md` remain out of scope: FastAPI, auth, persistence, observability, production frontend, and multi-day planning.
 
 ## Latest Checkpoint
@@ -81,4 +87,7 @@ N1–N7 graph nodes and Streamlit demo are complete. Remaining change sets are f
 - CS2: LLM-driven dwell time in N4 — single Gemini call, 20 min floor, math ceiling, reason in timeline notes (commit `3f30804`, 2026-06-08).
 - CS3 UX fix: typed clarification inputs (single_select/multi_select/text), one question per round, combined choice + free-text answers (commit `43047c7`, 2026-06-08).
 - CS4: multi-destination selection (1–3 stops) — single waypoint Routes call, per-segment food, N5 stop-removal/re-plan, scrollable multi-select card gallery (2026-06-08; commit `bcb9db8`).
-- CS5: N8 plan editor — park-at-N8 interrupt, closed-universe IDs-only edits, graph-driven app.py, gemini-3.1-pro-preview reasoning slots (2026-06-10; branch `cs5-n8-plan-editor`, commit hash backfilled with the next change set).
+- CS5: N8 plan editor — park-at-N8 interrupt, closed-universe IDs-only edits, graph-driven app.py, gemini-3.1-pro-preview reasoning slots (2026-06-10).
+- CS6: Google Maps deep-link export — `generate_gmaps_link` in gmaps.py, `st.link_button` in app.py (2026-06-10).
+- CS7: Hybrid itinerary format — bold header + vibe sentence + bullets per stop in N6 (2026-06-10).
+- CS8: Region-agnostic — N6 prompt neutralised, known-place-issues.md cleared of Kerala entries, README generalised (2026-06-10). All CS0–CS8 complete.

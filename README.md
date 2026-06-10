@@ -1,6 +1,6 @@
 # Picnix
 
-Picnix is a Streamlit test UI and LangGraph AI layer for planning short leisure trips in Kerala. It collects trip constraints, finds reachable Google Places candidates, validates destinations, and builds a round-trip route preview with optional food stops.
+Picnix is a Streamlit test UI and LangGraph AI layer for planning short leisure trips. It collects trip constraints, finds reachable Google Places candidates, validates destinations, and builds a round-trip route preview with optional food stops.
 
 ## Start The Project
 
@@ -40,7 +40,7 @@ Fill these keys:
 GOOGLE_MAPS_API_KEY=
 MAPBOX_TOKEN=
 GOOGLE_CLOUD_PROJECT=
-GOOGLE_CLOUD_LOCATION=asia-south1
+GOOGLE_CLOUD_LOCATION=<your-vertex-ai-region>  # e.g. us-central1; use "global" for gemini-3.1-pro-preview
 GOOGLE_APPLICATION_CREDENTIALS=
 ```
 

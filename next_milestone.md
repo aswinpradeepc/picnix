@@ -321,18 +321,18 @@ deferred as **FS-3** in `docs/future-scope.md`.
 
 After all change sets are done:
 
-- [ ] `agents.md` exists at project root and reflects current graph topology
-- [ ] `docs/graph.mmd` is generated when `DEBUG=true`
-- [ ] Dwell time cap is applied in N4 and checked in N5
-- [ ] N1 emits `clarification_prompt` dict; Streamlit renders radio + text input
-- [ ] Multi-destination selection works end to end (1–3 stops)
-- [ ] N8 plan editor exists; user can add/remove stops after seeing the itinerary
-- [ ] Google Maps link appears after final itinerary
-- [ ] Itinerary is bulleted, not prose paragraphs
-- [ ] No Kerala/India-specific strings remain in code or prompts
-- [ ] `agents.md` change log is updated with all completed change sets
-- [ ] All node functions have type hints and docstrings
-- [ ] `uv run streamlit run app.py` starts without errors
+- [x] `agents.md` exists at project root and reflects current graph topology
+- [x] `docs/graph.mmd` is generated when `DEBUG=true`
+- [x] Dwell time cap is applied in N4 and checked in N5
+- [x] N1 emits `clarification_prompt` dict; Streamlit renders radio + text input
+- [x] Multi-destination selection works end to end (1–3 stops)
+- [x] N8 plan editor exists; user can add/remove stops after seeing the itinerary
+- [x] Google Maps link appears after final itinerary
+- [x] Itinerary is bulleted, not prose paragraphs
+- [x] No Kerala/India-specific strings remain in code or prompts
+- [x] `agents.md` change log is updated with all completed change sets
+- [x] All node functions have type hints and docstrings
+- [x] `uv run streamlit run app.py` starts without errors
 
 ---
 
