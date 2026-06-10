@@ -65,7 +65,7 @@ SKIP_POINT_TYPES = {"departure"}
 
 
 def format_final_output(state: TripState) -> dict[str, Any]:
-    """Read verified `route`, `timeline`, and `itinerary_draft`, then write `final_geojson` and `final_itinerary` for the UI.
+    """Read verified `route`, `timeline`, and `itinerary_draft`, then write `final_geojson` and `final_itinerary` for the UI, and reset `plan_edit_mode` to close any edit cycle.
 
     Emits one Point feature per stop (plus start, return, and food markers), labelled "Stop N" by N4,
     and a single LineString covering the full multi-stop route. "departure" (leave-stop) entries are
@@ -92,4 +92,6 @@ def format_final_output(state: TripState) -> dict[str, Any]:
             "features": features,
         },
         "final_itinerary": str(state.get("itinerary_draft", "")),
+        # Deterministic end of an edit cycle: only N7 resets this flag.
+        "plan_edit_mode": False,
     }

@@ -33,3 +33,8 @@ class TripState(TypedDict):
     final_geojson: dict               # Final FeatureCollection consumed by the Mapbox/pydeck renderer.
     final_itinerary: str              # Final validated itinerary prose shown to the user.
     timeline: list[dict]              # Ordered timeline entries: time, label, coords, type, and notes.
+
+    plan_edit_mode: bool              # True from edit submission until N7 completes the re-plan; reset only by N7.
+    edit_instruction: str             # Raw user edit text for the current edit; cleared by N8 after consuming.
+    edit_history: list[dict]          # N8 log entries: {instruction, timestamp, resulting_destinations, unfulfilled}.
+    edit_notice: str                  # User-facing message about what was/wasn't applied; "" when nothing to say.

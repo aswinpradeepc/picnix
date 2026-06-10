@@ -28,6 +28,10 @@ EXPECTED_FIELDS = [
     "final_geojson",
     "final_itinerary",
     "timeline",
+    "plan_edit_mode",
+    "edit_instruction",
+    "edit_history",
+    "edit_notice",
 ]
 
 
@@ -56,6 +60,10 @@ EXPECTED_TYPES = {
     "final_geojson": dict,
     "final_itinerary": str,
     "timeline": list[dict],
+    "plan_edit_mode": bool,
+    "edit_instruction": str,
+    "edit_history": list[dict],
+    "edit_notice": str,
 }
 
 

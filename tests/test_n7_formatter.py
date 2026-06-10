@@ -142,3 +142,10 @@ def test_formatter_defaults_empty_itinerary_to_blank_string() -> None:
     result = format_final_output(state)
 
     assert result["final_itinerary"] == ""
+
+
+def test_formatter_resets_plan_edit_mode() -> None:
+    state = base_state()
+    state["plan_edit_mode"] = True
+
+    assert format_final_output(state)["plan_edit_mode"] is False

@@ -14,6 +14,7 @@ from graph.nodes.n4_route import build_route
 from graph.nodes.n5_validator import validate_structured_output
 from graph.nodes.n6_composer import compose_itinerary
 from graph.nodes.n7_formatter import format_final_output
+from graph.nodes.n8_editor import edit_plan
 from graph.state import TripState
 
 
@@ -45,6 +46,10 @@ def initial_trip_state() -> TripState:
         "final_geojson": {},
         "final_itinerary": "",
         "timeline": [],
+        "plan_edit_mode": False,
+        "edit_instruction": "",
+        "edit_history": [],
+        "edit_notice": "",
     }
 
 
@@ -144,11 +149,11 @@ def run_final_formatter(
     return apply_updates(state, formatter(state))
 
 
-def confirm_selection(
+def selection_updates(
     state: TripState,
     selected_indices: list[int],
-) -> TripState:
-    """Write the candidates at `selected_indices` into `selected_destinations` and mark the trip confirmed."""
+) -> dict[str, Any]:
+    """State updates that write the candidates at `selected_indices` into `selected_destinations` and mark the trip confirmed."""
     candidates = list(state.get("validated_candidates", []))
     max_destinations = int(state.get("max_destinations", 3))
     chosen = [
@@ -156,15 +161,20 @@ def confirm_selection(
         for index in selected_indices
         if 0 <= index < len(candidates)
     ][:max_destinations]
-    return apply_updates(
-        state,
-        {
-            "selected_destinations": chosen,
-            "presented_candidate_indices": list(range(len(candidates))),
-            "user_confirmed": bool(chosen),
-            "removal_notice": "",
-        },
-    )
+    return {
+        "selected_destinations": chosen,
+        "presented_candidate_indices": list(range(len(candidates))),
+        "user_confirmed": bool(chosen),
+        "removal_notice": "",
+    }
+
+
+def confirm_selection(
+    state: TripState,
+    selected_indices: list[int],
+) -> TripState:
+    """Apply `selection_updates` to a plain state dict (test/manual-pipeline helper)."""
+    return apply_updates(state, selection_updates(state, selected_indices))
 
 
 def load_more_candidates(
@@ -228,6 +238,7 @@ def build_graph():
     workflow.add_node("n5_validator", validate_structured_output)
     workflow.add_node("n6_composer", compose_itinerary)
     workflow.add_node("n7_formatter", format_final_output)
+    workflow.add_node("n8_editor", edit_plan)
     workflow.add_node("future_multiday", future_multiday_node)
 
     workflow.add_edge(START, "n1_intent")
@@ -261,10 +272,16 @@ def build_graph():
         },
     )
     workflow.add_edge("n6_composer", "n7_formatter")
-    workflow.add_edge("n7_formatter", END)
+    # N7 → N8 is unconditional: the graph always parks at the n8_editor interrupt with the
+    # plan shown. A user who never edits simply leaves the thread parked there.
+    workflow.add_edge("n7_formatter", "n8_editor")
+    workflow.add_edge("n8_editor", "n4_route")
     workflow.add_edge("future_multiday", END)
 
-    return workflow.compile(checkpointer=MemorySaver(), interrupt_before=["n4_route"])
+    return workflow.compile(
+        checkpointer=MemorySaver(),
+        interrupt_before=["n4_route", "n8_editor"],
+    )
 
 
 if SETTINGS.debug:

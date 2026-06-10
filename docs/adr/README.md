@@ -11,3 +11,4 @@ Each ADR records a significant architectural decision: what was decided, why, wh
 | [ADR-005](ADR-005-dynamic-food-search.md) | Dynamic food search from route geometry | Accepted |
 | [ADR-006](ADR-006-n5-n6-swap.md) | Validate structured data before composing prose (N5/N6 swap) | Accepted |
 | [ADR-007](ADR-007-multi-destination-routing.md) | Multi-destination routing & stop selection (CS4) | Accepted |
+| [ADR-008](ADR-008-n8-plan-editor.md) | N8 plan editor — park-at-interrupt edit loop (CS5) | Accepted |

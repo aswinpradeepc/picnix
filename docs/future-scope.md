@@ -62,6 +62,27 @@ Status legend: **Deferred** = agreed to revisit later; **Open** = no decision ye
 
 ---
 
+## FS-3 — On-demand validation for edit-requested places
+
+**Status:** Deferred. Current behavior accepted for now (see ADR-008).
+
+**Current behavior (as of CS5):**
+- N8 plan edits draw from a **closed universe**: `selected_destinations` ∪ `validated_candidates`, keyed by `place_id`.
+- An edit asking for a place or category outside that pool (e.g. "add Athirappilly" when it was never validated) is **not fulfilled**. N8 records it in the edit's `unfulfilled` list with reason "not in the validated pool for this trip", surfaces it via `edit_notice`, and leaves the rest of the edit applied. Nothing is invented and the user is never silently switched.
+
+**Problem:**
+- The validated pool only contains what N2/N3 fetched for the original constraints. Perfectly plannable places the user names mid-edit are rejected simply because they were never run through validation.
+
+**Options to consider:**
+1. **N8 → N3 re-entry.** Route unfulfilled place requests back through the existing validation node, then re-run the edit. Reuses N3 wholesale but is a graph-topology change (a cycle into the N3 loop from the edit path) and re-opens the N4 interrupt dispatch rules.
+2. **Targeted single-place validation call from N8's enforcement step.** A bounded "validate exactly this place" helper (Places text search + hours + travel-time check) invoked only for named places, keeping the graph shape unchanged. Violates the current "N8 is LLM + state surgery only" rule, so the rule would need amending.
+
+**Open questions:**
+- How to resolve a free-text place name to a `place_id` safely (text search ranking vs. asking the user to confirm)?
+- Does a newly validated place join `validated_candidates` permanently for later edits?
+
+---
+
 ## Notes
 
 - These items were raised in the session that implemented CS4 (2026-06-09). They are intentionally **not** in `next_milestone.md` yet to avoid implying they are scheduled.

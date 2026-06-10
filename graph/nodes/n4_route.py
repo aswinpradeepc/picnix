@@ -267,8 +267,24 @@ def _ceiling_dwell_seconds(
     return max(MIN_DWELL_SECONDS, available // max(num_destinations, 1))
 
 
+def _content_to_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                text = item.get("text") or item.get("content")
+                if text:
+                    parts.append(str(text))
+        return "\n".join(parts)
+    return str(content)
+
+
 def _parse_dwell_entries(content: Any) -> list[dict[str, Any]]:
-    raw = content if isinstance(content, str) else str(content)
+    raw = _content_to_text(content)
     try:
         data = json.loads(raw)
     except json.JSONDecodeError:

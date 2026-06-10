@@ -1,11 +1,12 @@
 from app import (
+    MAX_AUTO_RESUMES,
+    advance_graph,
     destination_empty_message,
     destination_summary,
     final_geojson_center,
     food_availability_rows,
     format_duration,
     format_km,
-    run_confirmed_destination_pipeline,
     timeline_rows,
 )
 
@@ -116,117 +117,60 @@ def test_final_geojson_center_uses_feature_coordinates() -> None:
     assert center == {"latitude": 10.1, "longitude": 76.4, "zoom": 9}
 
 
-def test_pipeline_runs_through_n7_when_n5_allows_plan() -> None:
-    state = {"user_confirmed": True, "selected_destinations": [{"name": "A"}]}
-    calls = []
+class FakeSnapshot:
+    def __init__(self, values: dict, next_nodes: tuple) -> None:
+        self.values = values
+        self.next = next_nodes
 
-    def fake_route(next_state):
-        calls.append("route")
-        return {**next_state, "route": {"total_distance_meters": 1000}}
 
-    def fake_validator(next_state):
-        calls.append("validator")
-        return {**next_state, "claim_failures": []}
+class FakeGraph:
+    """Plays back a queue of snapshots; each invoke(None) consumes one."""
 
-    def fake_composer(next_state):
-        calls.append("composer")
-        return {**next_state, "itinerary_draft": "Draft itinerary."}
+    def __init__(self, snapshots: list[FakeSnapshot]) -> None:
+        self.snapshots = list(snapshots)
+        self.resumes = 0
 
-    def fake_formatter(next_state):
-        calls.append("formatter")
-        return {
-            **next_state,
-            "final_geojson": {"type": "FeatureCollection", "features": []},
-            "final_itinerary": "Draft itinerary.",
-        }
+    def get_state(self, config: dict) -> FakeSnapshot:
+        return self.snapshots[0]
 
-    result = run_confirmed_destination_pipeline(
-        state,
-        route_runner=fake_route,
-        validator_runner=fake_validator,
-        composer_runner=fake_composer,
-        formatter_runner=fake_formatter,
+    def invoke(self, graph_input, config: dict) -> None:
+        assert graph_input is None
+        self.resumes += 1
+        self.snapshots.pop(0)
+
+
+def test_advance_graph_resumes_confirmed_n4_pauses_until_parked_at_n8() -> None:
+    graph = FakeGraph(
+        [
+            FakeSnapshot({"user_confirmed": True}, ("n4_route",)),
+            FakeSnapshot({"user_confirmed": True}, ("n4_route",)),  # N5 replan re-entry
+            FakeSnapshot({"user_confirmed": True}, ("n8_editor",)),
+        ]
     )
 
-    assert calls == ["route", "validator", "composer", "formatter"]
-    assert result["final_itinerary"] == "Draft itinerary."
+    snapshot = advance_graph(graph, {})
+
+    assert graph.resumes == 2
+    assert snapshot.next == ("n8_editor",)
 
 
-def test_pipeline_stops_when_all_stops_dropped() -> None:
-    state = {"user_confirmed": True, "selected_destinations": [{"name": "A"}]}
-    calls = []
+def test_advance_graph_stops_at_unconfirmed_n4_pause_for_the_gallery() -> None:
+    graph = FakeGraph([FakeSnapshot({"user_confirmed": False}, ("n4_route",))])
 
-    def fake_route(next_state):
-        calls.append("route")
-        return {**next_state, "route": {"total_distance_meters": 1000}}
+    snapshot = advance_graph(graph, {})
 
-    def fake_validator(next_state):
-        calls.append("validator")
-        # N5 dropped the last surviving stop and ended gracefully.
-        return {
-            **next_state,
-            "user_confirmed": False,
-            "selected_destinations": [],
-            "final_itinerary": "Couldn't build a workable plan.",
-            "claim_failures": [
-                {"field": "timeline", "issue": "Bad route.", "severity": "error"}
-            ],
-        }
-
-    def fake_composer(next_state):
-        calls.append("composer")
-        return next_state
-
-    result = run_confirmed_destination_pipeline(
-        state,
-        route_runner=fake_route,
-        validator_runner=fake_validator,
-        composer_runner=fake_composer,
-    )
-
-    assert calls == ["route", "validator"]
-    assert result["selected_destinations"] == []
-    assert result["final_itinerary"] == "Couldn't build a workable plan."
+    assert graph.resumes == 0
+    assert snapshot.next == ("n4_route",)
 
 
-def test_pipeline_replans_after_dropping_one_stop() -> None:
-    state = {"user_confirmed": True, "selected_destinations": [{"name": "A"}, {"name": "B"}]}
-    calls = []
+def test_advance_graph_backstop_caps_resume_attempts() -> None:
+    class StuckGraph(FakeGraph):
+        def invoke(self, graph_input, config: dict) -> None:
+            self.resumes += 1  # snapshot never changes
 
-    def fake_route(next_state):
-        calls.append("route")
-        return {**next_state, "route": {"total_distance_meters": 1000}}
+    graph = StuckGraph([FakeSnapshot({"user_confirmed": True}, ("n4_route",))])
 
-    def fake_validator(next_state):
-        calls.append("validator")
-        if len(next_state["selected_destinations"]) > 1:
-            # Drop the last stop but keep re-planning the rest.
-            return {
-                **next_state,
-                "user_confirmed": True,
-                "selected_destinations": next_state["selected_destinations"][:-1],
-                "claim_failures": [
-                    {"field": "timeline", "issue": "Too long.", "severity": "error"}
-                ],
-            }
-        return {**next_state, "claim_failures": []}
+    snapshot = advance_graph(graph, {})
 
-    def fake_composer(next_state):
-        calls.append("composer")
-        return {**next_state, "itinerary_draft": "Draft."}
-
-    def fake_formatter(next_state):
-        calls.append("formatter")
-        return {**next_state, "final_itinerary": "Draft."}
-
-    result = run_confirmed_destination_pipeline(
-        state,
-        route_runner=fake_route,
-        validator_runner=fake_validator,
-        composer_runner=fake_composer,
-        formatter_runner=fake_formatter,
-    )
-
-    assert calls == ["route", "validator", "route", "validator", "composer", "formatter"]
-    assert result["selected_destinations"] == [{"name": "A"}]
-    assert result["final_itinerary"] == "Draft."
+    assert graph.resumes == MAX_AUTO_RESUMES
+    assert snapshot.next == ("n4_route",)

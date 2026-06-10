@@ -1,6 +1,6 @@
 # Picnix Project Status
 
-Last updated: 2026-06-08 (CS4: multi-destination selection — 1–3 stops chained into one route via a single waypoint call; scrollable multi-select card gallery in Streamlit)
+Last updated: 2026-06-10 (CS5: N8 plan editor — natural-language edits re-plan from N4 onward via a park-at-N8 interrupt; app.py now drives the compiled graph; reasoning slots upgraded to gemini-3.1-pro-preview)
 
 ## Source Of Truth
 
@@ -26,12 +26,14 @@ Last updated: 2026-06-08 (CS4: multi-destination selection — 1–3 stops chain
 - N5 structured output validator with Python structural checks (generalised to N stops), Gemini semantic validation, and claim failure state. On error it drops the unplannable stop from `selected_destinations` (with a user-facing `removal_notice`) and re-routes the remaining stops; routes to END only when none remain. (CS4)
 - N6 itinerary composer with one schema-constrained structured Gemini call, inline claim audit, and unverified-claim stripping before writing `itinerary_draft`.
 - N7 GeoJSON formatter that builds `final_geojson` from route/timeline (one Point per stop labelled "Stop N", full multi-stop LineString, leave-stop pins skipped) and copies `itinerary_draft` to `final_itinerary`. (CS4)
-- LangGraph wiring now runs `n4_route → n5_validator → n6_composer → n7_formatter → END`; N5 errors with surviving stops route back to `n4_route` to re-plan.
+- N8 plan editor: after the plan is shown the graph parks at `interrupt_before=["n8_editor"]`; a natural-language edit resumes N8 → N4 → N5 → N6 → N7 and parks again. One `gemini-3.1-pro-preview` call returns place IDs from the closed validated pool under an enforced `response_schema`; pure-Python `apply_edit_result` maps IDs to real dicts, validates timing changes, and never writes an empty stop list. (CS5, ADR-008)
+- LangGraph wiring now runs `n4_route → n5_validator → n6_composer → n7_formatter → n8_editor → n4_route` (N7→N8 unconditional; END only from N5's no-stops path and the multiday dead end); N5 errors with surviving stops route back to `n4_route` to re-plan.
+- `app.py` drives the compiled graph: one MemorySaver thread per Streamlit session, panel dispatch off `graph.get_state(config).next`, and `advance_graph` auto-resumes every confirmed `n4_route` pause (edit re-entries and N5 replans) so the gallery only renders for the initial selection. (CS5)
 - Streamlit demo for chat, a scrollable multi-select destination card gallery (checkbox per card, "Confirm selection" + "Load more options"), N5 stop-removal messaging, N4 route/timeline/food preview, N6 final itinerary text, and N7 Mapbox/pydeck route rendering. (CS4)
 - `agents.md` created at project root as the shared north star for all agents working on this project. (CS0)
 - Graph viz utility at `tools/graph_viz.py` exports `docs/graph.mmd` (and `docs/graph.png` if pygraphviz is installed) when `DEBUG=true`. (CS1)
 - N1 now emits `clarification_prompt: {question, input_type, options, allow_custom}` alongside each assistant message; `input_type` is one of `single_select`/`multi_select`/`text`. N1 asks exactly one question per round (no chained prose). Streamlit renders checkboxes (multi-select), radio (single-select), or a text box (text) accordingly, and always offers a free-text box so the user can combine a choice with extra context — both are merged into one labeled answer. Options sourced from `INTEREST_TYPE_MAP` keys in N2. (CS3 + UX fix)
-- N1, N4 (dwell time call), and N5 (semantic validation pass) upgraded to `gemini-2.5-pro` with `temperature=1.0`; N6 remains on `gemini-2.5-flash`. Requires `GOOGLE_CLOUD_LOCATION=us-central1` (Pro not available in `asia-south1`).
+- Reasoning slots — N1, N4 (dwell time call), N5 (semantic validation pass), and N8 (plan editor) — run `gemini-3.1-pro-preview` (`REASONING_GEMINI_MODEL`) with `temperature=1.0`; N6 remains on `gemini-2.5-flash`. Requires `GOOGLE_CLOUD_LOCATION=global` (3.1 Pro is global-endpoint only; 3 Pro preview was discontinued 2026-03).
 
 ## Current Fixed Limits
 
@@ -48,12 +50,14 @@ Last updated: 2026-06-08 (CS4: multi-destination selection — 1–3 stops chain
 - ADR-001 through ADR-005: retroactive records for LangGraph, Vertex AI, candidate limits, interrupt placement, and dynamic food search.
 - ADR-006: N5/N6 swap — validate structured N4 output before composing prose. Includes N5→N4 re-prompt loop design.
 - ADR-007: Multi-destination routing & stop selection (CS4) — single `computeRoutes` call with intermediate waypoints; current visit order = candidate-list order (no optimization); current removal = N5 auto-drops the last stop. Deferred revisits documented in `docs/future-scope.md` (FS-1 stop order, FS-2 user-driven removal).
+- ADR-008: N8 plan editor (CS5) — park-at-N8 interrupt model vs. conditional N7→END, closed-universe edits with FS-3 deferral, IDs-only LLM contract, app-side auto-resume rule for the N4 interrupt.
 
 ## Deferred Discussions (Future Scope)
 
 - `docs/future-scope.md` — agreed-to-revisit design discussions that are intentionally **not** scheduled into a change set yet.
 - **FS-1** — Visit order of selected stops (geo-optimize vs. user-controlled vs. current candidate-list order).
 - **FS-2** — User-driven stop removal: when a plan does not fit, show the stops with distance / travel time / time-spent and let the user choose what to remove (replaces the current auto-drop-last behavior).
+- **FS-3** — On-demand validation for edit-requested places: N8 → N3 re-entry or a targeted single-place validation call, so "add Athirappilly" works when it isn't in the validated pool.
 
 ## Designed But Not Yet Implemented
 
@@ -61,7 +65,7 @@ N1–N7 graph nodes and Streamlit demo are complete. Remaining change sets are f
 
 - **CS3 ✓ done (+ UX fix)** — N1 emits a typed `clarification_prompt` dict; Streamlit renders the matching control (checkbox/radio/text) and merges a selected choice with optional free-text into one answer. The earlier known issue (free-form fields returned empty `options` and hid the input) is resolved: `text` input_type now renders a dedicated text box instead of being dropped.
 - **CS4 ✓ done** — Multi-destination selection (1–3 stops). `selected_destinations` (+ `max_destinations`, `presented_candidate_indices`, `removal_notice`) replaces `validated_destination`/`presented_candidate_index`. `gmaps.compute_route` gained `intermediates` → one `computeRoutes` call with waypoints + per-leg `normalized_legs`. N4 chains stops into one route/timeline with per-segment food; N5 drops the unplannable stop and re-plans the rest; N7 labels "Stop N". Streamlit shows a scrollable multi-select card gallery.
-- **CS5** — N8 plan editor: natural-language edits after itinerary is shown, routes back to N4.
+- **CS5 ✓ done** — N8 plan editor (cs5.md v2 spec): park-at-N8 interrupt, closed-universe IDs-only edits, app-side auto-resume of the N4 interrupt; FS-3 (on-demand validation for out-of-pool places) deferred. Recorded in ADR-008.
 - **CS6** — Google Maps deep-link export after N7.
 - **CS7** — Bulleted itinerary format in N6.
 - **CS8** — Region-agnostic: remove Kerala/India-specific strings from code and prompts.
@@ -76,4 +80,5 @@ N1–N7 graph nodes and Streamlit demo are complete. Remaining change sets are f
 - CS0+CS1: `agents.md` north star + graph viz utility (commit `3e08f9d`, 2026-06-08).
 - CS2: LLM-driven dwell time in N4 — single Gemini call, 20 min floor, math ceiling, reason in timeline notes (commit `3f30804`, 2026-06-08).
 - CS3 UX fix: typed clarification inputs (single_select/multi_select/text), one question per round, combined choice + free-text answers (commit `43047c7`, 2026-06-08).
-- CS4: multi-destination selection (1–3 stops) — single waypoint Routes call, per-segment food, N5 stop-removal/re-plan, scrollable multi-select card gallery (2026-06-08; commit hash backfilled with the next change set, per the convention above).
+- CS4: multi-destination selection (1–3 stops) — single waypoint Routes call, per-segment food, N5 stop-removal/re-plan, scrollable multi-select card gallery (2026-06-08; commit `bcb9db8`).
+- CS5: N8 plan editor — park-at-N8 interrupt, closed-universe IDs-only edits, graph-driven app.py, gemini-3.1-pro-preview reasoning slots (2026-06-10; branch `cs5-n8-plan-editor`, commit hash backfilled with the next change set).

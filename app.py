@@ -1,24 +1,17 @@
 from __future__ import annotations
 
-from collections.abc import Callable
+import uuid
+from typing import Any
 
 import pydeck as pdk
 import streamlit as st
 
 from graph.graph import (
-    confirm_selection,
+    build_graph,
     initial_trip_state,
     load_more_candidates,
-    run_candidate_discovery,
-    run_final_formatter,
-    run_intent_turn,
-    run_itinerary_composer,
-    run_route_builder,
-    run_structured_validator,
+    selection_updates,
 )
-
-
-MAX_REPLAN_ATTEMPTS = 3
 from tools.mapbox import get_mapbox_token
 
 
@@ -76,14 +69,6 @@ def food_availability_rows(food_availability: list[dict]) -> list[dict]:
     ]
 
 
-def has_error_claims(state: dict) -> bool:
-    return any(
-        failure.get("severity") == "error"
-        for failure in state.get("claim_failures", [])
-        if isinstance(failure, dict)
-    )
-
-
 def final_geojson_center(final_geojson: dict) -> dict:
     coordinates: list[list[float]] = []
     for feature in final_geojson.get("features", []):
@@ -124,40 +109,54 @@ def final_geojson_center(final_geojson: dict) -> dict:
     return {"latitude": latitude, "longitude": longitude, "zoom": zoom}
 
 
-def run_confirmed_destination_pipeline(
-    state: dict,
-    *,
-    route_runner: Callable[[dict], dict] = run_route_builder,
-    validator_runner: Callable[[dict], dict] = run_structured_validator,
-    composer_runner: Callable[[dict], dict] = run_itinerary_composer,
-    formatter_runner: Callable[[dict], dict] = run_final_formatter,
-) -> dict:
-    """Build and validate the multi-stop route, dropping any unplannable stop and re-routing
-    the remaining ones (N5 keeps `user_confirmed` true while stops survive), then compose."""
-    next_state = state
-    for _ in range(MAX_REPLAN_ATTEMPTS):
-        next_state = route_runner(next_state)
-        next_state = validator_runner(next_state)
-        if not has_error_claims(next_state):
-            break
-        if not next_state.get("selected_destinations"):
-            break
-    if not next_state.get("selected_destinations") or has_error_claims(next_state):
-        return next_state
-    next_state = composer_runner(next_state)
-    return formatter_runner(next_state)
+MAX_AUTO_RESUMES = 10
+
+
+def advance_graph(graph: Any, config: dict) -> Any:
+    """Resume the parked graph until it actually needs user input, then return the snapshot.
+
+    `interrupt_before=["n4_route"]` fires on *every* entry into N4 — the initial selection,
+    N5 stop-removal replans, and N8 edit re-entries alike. Only the initial selection needs
+    the user (the gallery); the other pauses carry `user_confirmed=True` and must flow
+    through without re-showing the gallery. Naturally bounded (each N5 replan drops a stop;
+    an edit re-enters N4 once), with MAX_AUTO_RESUMES as a hard backstop.
+    """
+    for _ in range(MAX_AUTO_RESUMES):
+        snapshot = graph.get_state(config)
+        if "n4_route" in tuple(snapshot.next) and snapshot.values.get("user_confirmed"):
+            graph.invoke(None, config)
+            continue
+        return snapshot
+    return graph.get_state(config)
+
+
+@st.cache_resource
+def get_graph() -> Any:
+    return build_graph()
+
+
+def thread_config() -> dict:
+    return {"configurable": {"thread_id": st.session_state.thread_id}}
+
+
+def current_snapshot() -> Any:
+    return get_graph().get_state(thread_config())
 
 
 def ensure_session_state() -> None:
-    if "graph_state" not in st.session_state:
-        st.session_state.graph_state = initial_trip_state()
-        st.session_state.graph_state = run_intent_turn(st.session_state.graph_state)
+    if "thread_id" not in st.session_state:
+        st.session_state.thread_id = str(uuid.uuid4())
+        # First run: N1 writes the greeting, the conditional edge routes to END,
+        # and the thread waits for the first user message.
+        get_graph().invoke(initial_trip_state(), thread_config())
     if "partial_demo_notice" not in st.session_state:
         st.session_state.partial_demo_notice = ""
+    if "edit_in_flight" not in st.session_state:
+        st.session_state.edit_in_flight = False
 
 
-def render_chat() -> None:
-    for message in st.session_state.graph_state["raw_messages"]:
+def render_chat(state: dict) -> None:
+    for message in state.get("raw_messages", []):
         with st.chat_message(message["role"]):
             st.markdown(message["content"])
 
@@ -209,15 +208,18 @@ def render_clarification_options(state: dict) -> None:
 
 
 def handle_user_message(user_message: str) -> None:
+    """Run one N1 turn on the graph thread; once constraints land, the same run
+    continues through N2/N3 and parks at the N4 selection interrupt."""
+    graph = get_graph()
+    config = thread_config()
+    state = graph.get_state(config).values
+    messages = [
+        *state.get("raw_messages", []),
+        {"role": "user", "content": user_message},
+    ]
     with st.spinner("Thinking through the trip constraints..."):
-        st.session_state.graph_state = run_intent_turn(
-            st.session_state.graph_state,
-            user_message,
-        )
-
-    if st.session_state.graph_state.get("constraints") and not st.session_state.graph_state.get("candidates"):
-        with st.spinner("Finding and validating destination candidates..."):
-            st.session_state.graph_state = run_candidate_discovery(st.session_state.graph_state)
+        graph.invoke({"raw_messages": messages}, config)
+        advance_graph(graph, config)
 
 
 def render_selection_gallery(state: dict) -> None:
@@ -259,17 +261,37 @@ def render_selection_gallery(state: dict) -> None:
     load_more = more_col.button("Load more options", use_container_width=True)
 
     if confirm:
-        confirmed_state = confirm_selection(state, selected_indices)
+        graph = get_graph()
+        config = thread_config()
         with st.spinner("Building, validating, and writing the itinerary..."):
-            st.session_state.graph_state = run_confirmed_destination_pipeline(confirmed_state)
+            # as_node="n3_validator" re-arms the thread even when it previously
+            # reached END (the all-stops-dropped graceful failure path).
+            graph.update_state(
+                config,
+                selection_updates(state, selected_indices),
+                as_node="n3_validator",
+            )
+            graph.invoke(None, config)
+            final_state = advance_graph(graph, config).values
         st.session_state.partial_demo_notice = (
-            "Plan ready." if st.session_state.graph_state.get("final_itinerary") else ""
+            "Plan ready." if final_state.get("final_itinerary") else ""
         )
         st.rerun()
 
     if load_more:
+        graph = get_graph()
+        config = thread_config()
         with st.spinner("Validating more options..."):
-            st.session_state.graph_state = load_more_candidates(state)
+            updated = load_more_candidates(state)
+        graph.update_state(
+            config,
+            {
+                "candidate_index": updated.get("candidate_index", 0),
+                "validated_candidates": updated.get("validated_candidates", []),
+                "validation_failures": updated.get("validation_failures", []),
+            },
+            as_node="n3_validator",
+        )
         st.rerun()
 
 
@@ -302,19 +324,78 @@ def render_plan(state: dict) -> None:
             st.table(food_rows)
 
 
-def render_destination_panel() -> None:
-    state = st.session_state.graph_state
+def render_plan_editor(state: dict) -> None:
+    """Edit box shown while the graph is parked before N8: submitting an edit resumes
+    the thread through N8 → N4 → … → N7 and parks it here again with the new plan."""
+    st.divider()
+    st.subheader("Want to change anything?")
+    with st.form("plan_edit_form", clear_on_submit=True):
+        edit_instruction = st.text_input(
+            "Want to change anything? Describe it.",
+            placeholder="e.g. remove the waterfall, add the beach instead, leave at 7am",
+            label_visibility="collapsed",
+        )
+        submitted = st.form_submit_button(
+            "Update plan",
+            use_container_width=True,
+            disabled=st.session_state.edit_in_flight,
+        )
+
+    if submitted and edit_instruction.strip() and not st.session_state.edit_in_flight:
+        st.session_state.edit_in_flight = True
+        graph = get_graph()
+        config = thread_config()
+        try:
+            with st.spinner("Reworking the plan..."):
+                graph.update_state(
+                    config,
+                    {
+                        "edit_instruction": edit_instruction.strip(),
+                        "plan_edit_mode": True,
+                    },
+                )
+                graph.invoke(None, config)
+                final_state = advance_graph(graph, config).values
+        finally:
+            st.session_state.edit_in_flight = False
+        st.session_state.partial_demo_notice = (
+            "Plan updated." if final_state.get("final_itinerary") else ""
+        )
+        st.rerun()
+
+    edit_history = state.get("edit_history", [])
+    if edit_history:
+        with st.expander(f"Edit history ({len(edit_history)})"):
+            for entry in edit_history:
+                stops = ", ".join(entry.get("resulting_destinations", [])) or "no stops"
+                st.markdown(f"- **{entry.get('instruction', '')}** → {stops}")
+
+
+def render_destination_panel(state: dict, next_nodes: tuple[str, ...]) -> None:
+    """Dispatch the right panel off which node the graph is paused before."""
     removal_notice = state.get("removal_notice", "")
     if removal_notice:
         st.warning(removal_notice)
 
-    if state.get("user_confirmed") and state.get("route"):
+    if "n8_editor" in next_nodes:
+        # Parked with the finished plan: itinerary + edit box. N8 rewrites
+        # edit_notice every cycle, so a stale notice never carries over.
+        edit_notice = state.get("edit_notice", "")
+        if edit_notice:
+            st.info(edit_notice)
         render_plan(state)
+        render_plan_editor(state)
         return
 
+    if "n4_route" in next_nodes:
+        # advance_graph already consumed every confirmed pause, so this is the
+        # initial (or post-removal re-selection) gallery.
+        render_selection_gallery(state)
+        return
+
+    # Thread at END: intent phase, graceful failure, or the multiday dead end.
     if state.get("final_itinerary") and not state.get("route"):
         st.error(state["final_itinerary"])
-
     render_selection_gallery(state)
 
 
@@ -363,21 +444,29 @@ def main() -> None:
     st.set_page_config(page_title="Picnix", layout="wide")
     ensure_session_state()
 
+    snapshot = current_snapshot()
+    state = dict(snapshot.values)
+    next_nodes = tuple(snapshot.next)
+
     left, right = st.columns([0.4, 0.6])
     with left:
         st.title("Picnix")
-        render_chat()
-        render_clarification_options(st.session_state.graph_state)
-        if user_message := st.chat_input("Tell me your trip mood, starting point, time, and vehicle"):
+        render_chat(state)
+        render_clarification_options(state)
+        if state.get("constraints"):
+            st.caption("Constraints locked in — tweak the plan from the editor on the right.")
+        elif user_message := st.chat_input(
+            "Tell me your trip mood, starting point, time, and vehicle"
+        ):
             handle_user_message(user_message)
             st.rerun()
 
     with right:
         st.title("Trip Preview")
-        st.caption("Demo: N1 intent collection through N7 final itinerary output.")
-        render_destination_panel()
+        st.caption("Demo: N1 intent collection through N8 plan edits.")
+        render_destination_panel(state, next_nodes)
         st.divider()
-        render_trip_map(st.session_state.graph_state.get("final_geojson", {}))
+        render_trip_map(state.get("final_geojson", {}))
 
 
 if __name__ == "__main__":

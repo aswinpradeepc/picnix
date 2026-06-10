@@ -17,7 +17,7 @@ This file is the shared reference for every agent (Claude Code, Codex, Antigravi
 | Concern | Tool |
 |---|---|
 | AI graph | LangGraph (Python) |
-| LLM | Google Vertex AI — use `gemini-2.5-flash` via `langchain-google-genai` (`ChatGoogleGenerativeAI`) |
+| LLM | Google Vertex AI via `langchain-google-genai` (`ChatGoogleGenerativeAI`) — `gemini-3.1-pro-preview` for reasoning slots (N1, N4 dwell, N5 semantic, N8), `gemini-2.5-flash` for N6 prose. Requires `GOOGLE_CLOUD_LOCATION=global` |
 | Map rendering | Mapbox GL JS, via `pydeck` in Streamlit |
 | Place search & data | Google Maps Places API (New) |
 | Routing & distance | Google Maps Routes API |
@@ -45,7 +45,7 @@ GOOGLE_APPLICATION_CREDENTIALS=  # optional; leave blank/unset for local ADC OAu
 | Places API (New) | `places.googleapis.com` | `tools/gmaps.py`, N2, N3, N4 | Destination search, place details, opening hours/access validation, food stop search |
 | Geocoding API | `geocoding-backend.googleapis.com` | `tools/gmaps.py`, N2 | Convert user start-location text into latitude/longitude |
 | Routes API | `routes.googleapis.com` | `tools/gmaps.py`, N3, N4 | Actual travel-time validation, round-trip route geometry, legs, ETAs |
-| Vertex AI API | `aiplatform.googleapis.com` | `tools/vertex.py`, N1, N5, N6 | Gemini 2.5 Flash calls through `ChatGoogleGenerativeAI` using the Vertex AI backend |
+| Vertex AI API | `aiplatform.googleapis.com` | `tools/vertex.py`, N1, N4, N5, N6, N8 | Gemini calls (3.1 Pro preview + 2.5 Flash) through `ChatGoogleGenerativeAI` using the Vertex AI backend |
 
 ### Package Management
 
@@ -77,6 +77,7 @@ Use `uv` for dependency management. `pyproject.toml` is the single source of tru
 ## File Ownership Map
 
 ```
+app.py                      — Streamlit UI. Drives the compiled graph: one thread per session, dispatches panels off graph.get_state(config).next.
 graph/state.py              — TripState schema. Change only when a node needs new fields.
 graph/graph.py              — Node wiring, edges, interrupt config. Change when graph topology changes.
 graph/nodes/                — One file per node. Each node owns its section of state.
@@ -134,3 +135,5 @@ Node responsibilities at a glance:
 | 2026-06-08 | model | N1, N4 dwell time, N5 semantic pass upgraded to gemini-2.5-pro (temperature=1.0); N6 stays on gemini-2.5-flash; REASONING_GEMINI_MODEL constant in tools/vertex.py; requires us-central1 |
 | 2026-06-08 | CS3 fix | clarification_prompt gains input_type (single_select/multi_select/text); N1 asks one question per round; Streamlit renders checkboxes (multi) / radio (single) / text box accordingly and merges selection + free-text into one labeled answer |
 | 2026-06-08 | CS4 | Multi-destination selection (1-3 stops). State: selected_destinations/max_destinations/presented_candidate_indices/removal_notice replace validated_destination/presented_candidate_index. gmaps.compute_route gains intermediates → single computeRoutes call with waypoints + per-leg normalized_legs. N4 chains start→stops→start, one timeline, per-segment food, batched dwell-time call. N5 drops the unplannable stop and re-routes the rest (END when none remain). N7 labels Stop N and skips leave-stop pins. Streamlit shows a scrollable card gallery with per-card checkboxes, Confirm selection + Load more options |
+| 2026-06-10 | model | Reasoning slots (N1, N4 dwell, N5 semantic, N8) upgraded gemini-2.5-pro → gemini-3.1-pro-preview; requires GOOGLE_CLOUD_LOCATION=global; N6 stays on gemini-2.5-flash. N4 dwell parser handles list-content responses |
+| 2026-06-10 | CS5 | N8 plan editor (ADR-008). State: plan_edit_mode/edit_instruction/edit_history/edit_notice. N7→N8 unconditional, N8→N4, interrupt_before adds n8_editor — every finished plan parks at N8. N8 = one LLM call returning place IDs from the closed validated pool under enforced response_schema + pure-Python enforcement (apply_edit_result). N7 resets plan_edit_mode. app.py refactored to drive the compiled graph: per-session thread, get_state(.next) dispatch, auto-resume of confirmed n4_route pauses (advance_graph) |
