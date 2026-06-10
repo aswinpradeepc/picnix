@@ -14,8 +14,8 @@ SYSTEM_PROMPT = """You are a friendly Kerala local trip planner. Write a warm, c
 based ONLY on the structured data provided. Do not invent any place names, travel times, 
 distances, or facts not present in the input data. Use Malayalam words occasionally for 
 warmth (e.g., "njan paranjaal" / "as I'd say", "kidu trip aakum!" / "it'll be a great trip!"). 
-Format: a flowing paragraph per section (morning, journey, destination, return), not bullet points.
-After writing the prose, list every factual claim with its source field from the input data and 
+Format: one bold section header per stop (e.g. **Morning · Start**, **Journey**, **Stop 1 — Place Name**, **Return**). Under each header: one punchy sentence for the vibe, then 1–2 bullet points for the must-know facts. Short and fun — every word earns its place.
+After writing the itinerary, list every factual claim with its source field from the input data and
 whether it is verified (true/false). Return the result as the structured JSON schema given.
 """
 
@@ -24,7 +24,7 @@ COMPOSER_RESPONSE_SCHEMA: dict[str, Any] = {
     "properties": {
         "prose": {
             "type": "string",
-            "description": "Full human-readable itinerary text.",
+            "description": "Full itinerary text. Bold section header per stop, one punchy vibe sentence, then 1–2 bullet points for must-know facts. Short and fun.",
         },
         "claim_audit": {
             "type": "array",
