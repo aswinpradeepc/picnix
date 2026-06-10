@@ -248,17 +248,17 @@ deferred as **FS-3** in `docs/future-scope.md`.
        No API call. Pure URL construction.
        """
    ```
-   - Extract ordered `coords` from `timeline` entries of type `waypoint`
-   - First entry = origin, last entry = destination, middle entries = waypoints
+   - Extract the `coords` from the single `'start'` timeline entry → used as both origin and destination (round trip)
+   - Extract `coords` from all `'destination'` timeline entries → used as waypoints
    - Build URL:
      ```
      https://www.google.com/maps/dir/?api=1
-       &origin=<lat,lng>
-       &destination=<lat,lng>
-       &waypoints=<lat,lng>|<lat,lng>
+       &origin=<start lat,lng>
+       &destination=<start lat,lng>
+       &waypoints=<stop1 lat,lng>|<stop2 lat,lng>|...
        &travelmode=driving
      ```
-   - Return the URL string
+   - Return the URL string (empty string if no start entry)
 
 2. In `app.py`, after the final itinerary is rendered:
    - Call `generate_gmaps_link(state["timeline"])`

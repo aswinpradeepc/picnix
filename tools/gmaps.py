@@ -395,6 +395,42 @@ def _period_time(value: dict[str, Any]) -> time:
     return time(int(value.get("hour", 0)), int(value.get("minute", 0)))
 
 
+def generate_gmaps_link(timeline: list[dict]) -> str:
+    """
+    Builds a Google Maps directions deep link from the trip timeline.
+    Reads: the 'start' entry (origin/destination) and all 'destination' entries (waypoints).
+    Returns a round-trip URL: origin → stop1 → stop2 → … → origin.
+    No API call — pure URL construction.
+    """
+    from urllib.parse import urlencode
+
+    start_entries = [
+        entry["coords"]
+        for entry in timeline
+        if entry.get("type") == "start" and entry.get("coords")
+    ]
+    dest_entries = [
+        entry["coords"]
+        for entry in timeline
+        if entry.get("type") == "destination" and entry.get("coords")
+    ]
+    if not start_entries:
+        return ""
+
+    origin = start_entries[0]
+    params: dict[str, str] = {
+        "api": "1",
+        "origin": f"{origin['lat']},{origin['lng']}",
+        "destination": f"{origin['lat']},{origin['lng']}",
+        "travelmode": "driving",
+    }
+    if dest_entries:
+        params["waypoints"] = "|".join(
+            f"{c['lat']},{c['lng']}" for c in dest_entries
+        )
+    return "https://www.google.com/maps/dir/?" + urlencode(params)
+
+
 def validate_place_open_for_window(
     details: dict[str, Any],
     window_start: datetime,

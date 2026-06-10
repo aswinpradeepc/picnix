@@ -12,6 +12,7 @@ from graph.graph import (
     load_more_candidates,
     selection_updates,
 )
+from tools.gmaps import generate_gmaps_link
 from tools.mapbox import get_mapbox_token
 
 
@@ -304,6 +305,9 @@ def render_plan(state: dict) -> None:
     if final_itinerary:
         st.subheader("Itinerary")
         st.markdown(final_itinerary)
+        gmaps_link = generate_gmaps_link(state.get("timeline", []))
+        if gmaps_link:
+            st.link_button("Open in Google Maps 🗺️", url=gmaps_link)
 
     route = state.get("route", {})
     if route:
