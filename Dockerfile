@@ -18,6 +18,7 @@ COPY config ./config
 COPY docs ./docs
 COPY graph ./graph
 COPY observability ./observability
+COPY persistence ./persistence
 COPY tools ./tools
 
 EXPOSE 8501
