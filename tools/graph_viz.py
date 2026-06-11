@@ -15,12 +15,14 @@ def export_graph_diagram() -> None:
     if not SETTINGS.debug:
         return
 
+    from langgraph.checkpoint.memory import MemorySaver
+
     from graph.graph import build_graph  # local import avoids circular deps at module load
 
     docs_dir = Path(__file__).parent.parent / "docs"
     docs_dir.mkdir(exist_ok=True)
 
-    compiled = build_graph()
+    compiled = build_graph(checkpointer=MemorySaver())
     mermaid_text = compiled.get_graph().draw_mermaid()
     (docs_dir / "graph.mmd").write_text(mermaid_text, encoding="utf-8")
 

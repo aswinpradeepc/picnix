@@ -98,7 +98,7 @@ graph/nodes/                — One file per node. Each node owns its section of
 tools/gmaps.py              — All Google Maps HTTP calls. No business logic here.
 tools/mapbox.py             — Mapbox token helpers only.
 config/settings.py          — All env var loading. No hardcoded strings elsewhere.
-db/ or persistence module    — PostgreSQL connection pooling, schema setup, user/trial helpers, LangGraph checkpointer factory.
+persistence/database.py      — PostgreSQL connection pooling, schema setup, user/trial helpers, LangGraph checkpointer factory.
 observability/bootstrap.py   — Phoenix/OpenInference setup. Called before graph imports; no manual spans in current scope.
 docs/known-place-issues.md  — Durable place-level exceptions. Update here, not in node code.
 agents.md                   — This file. Update when scope, stack, or ownership changes.
@@ -168,3 +168,4 @@ Node responsibilities at a glance:
 | 2026-06-11 | DEPLOY-OBS | Docker Compose observability deployment: app + self-hosted Phoenix on one GCP Compute Engine VM, Phoenix auth env wiring, app traces routed to `http://phoenix:6006/v1/traces`. |
 | 2026-06-11 | BACKEND-PERSIST-1 | Phase 1 docs for backend/auth/persistence milestone. Added ADR-010, moved auth/database out of hard out-of-scope, and documented PostgreSQL + streamlit-authenticator + LangGraph Postgres checkpointing direction. |
 | 2026-06-11 | BACKEND-PERSIST-2 | Phase 2 dependency and infrastructure setup. Added streamlit-authenticator, psycopg/psycopg-pool, langgraph-checkpoint-postgres, DATABASE_URL config, and a health-checked PostgreSQL db service with postgres-data volume. |
+| 2026-06-11 | BACKEND-PERSIST-3 | Phase 3 database initialization and graph persistence. Added persistence/database.py schema setup for users/trip_runs, LangGraph PostgresSaver setup, and build_graph checkpointer injection with Postgres as the runtime default. |

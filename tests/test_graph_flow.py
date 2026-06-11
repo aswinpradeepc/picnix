@@ -10,6 +10,7 @@ n4_route/n8_editor, and the advance_graph auto-resume rule.
 from typing import Any
 
 import graph.graph as graph_module
+from langgraph.checkpoint.memory import MemorySaver
 from app import advance_graph
 from graph.graph import build_graph, initial_trip_state, selection_updates
 
@@ -119,24 +120,24 @@ def patched_graph(monkeypatch):
     monkeypatch.setattr(graph_module, "compose_itinerary", fake_compose_itinerary)
     monkeypatch.setattr(graph_module, "edit_plan", fake_edit_plan)
     # n7_formatter runs for real: it must reset plan_edit_mode.
-    return build_graph()
+    return build_graph(checkpointer=MemorySaver())
 
 
 def test_compiled_graph_interrupts_before_n4_and_n8() -> None:
-    compiled = build_graph()
+    compiled = build_graph(checkpointer=MemorySaver())
 
     assert set(compiled.interrupt_before_nodes) == {"n4_route", "n8_editor"}
 
 
 def test_n7_has_unconditional_edge_to_n8_and_no_end_edge() -> None:
-    drawable = build_graph().get_graph()
+    drawable = build_graph(checkpointer=MemorySaver()).get_graph()
     n7_targets = {edge.target for edge in drawable.edges if edge.source == "n7_formatter"}
 
     assert n7_targets == {"n8_editor"}
 
 
 def test_n8_routes_back_to_n4() -> None:
-    drawable = build_graph().get_graph()
+    drawable = build_graph(checkpointer=MemorySaver()).get_graph()
     n8_targets = {edge.target for edge in drawable.edges if edge.source == "n8_editor"}
 
     assert n8_targets == {"n4_route"}

@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from langgraph.checkpoint.memory import MemorySaver
+from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.graph import END, START, StateGraph
 
 from config.settings import SETTINGS
@@ -16,6 +16,7 @@ from graph.nodes.n6_composer import compose_itinerary
 from graph.nodes.n7_formatter import format_final_output
 from graph.nodes.n8_editor import edit_plan
 from graph.state import TripState
+from persistence.database import create_runtime_checkpointer
 
 
 VALIDATED_SUGGESTION_LIMIT = 5
@@ -229,7 +230,7 @@ def future_multiday_node(state: TripState) -> dict[str, Any]:
     }
 
 
-def build_graph():
+def build_graph(checkpointer: BaseCheckpointSaver | None = None):
     workflow = StateGraph(TripState)
     workflow.add_node("n1_intent", collect_intent)
     workflow.add_node("n2_isochrone", fetch_isochrone_candidates)
@@ -278,8 +279,12 @@ def build_graph():
     workflow.add_edge("n8_editor", "n4_route")
     workflow.add_edge("future_multiday", END)
 
+    active_checkpointer = checkpointer
+    if active_checkpointer is None:
+        active_checkpointer = create_runtime_checkpointer()
+
     return workflow.compile(
-        checkpointer=MemorySaver(),
+        checkpointer=active_checkpointer,
         interrupt_before=["n4_route", "n8_editor"],
     )
 

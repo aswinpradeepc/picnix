@@ -1,3 +1,6 @@
+import graph.graph as graph_module
+from langgraph.checkpoint.memory import MemorySaver
+
 from graph.graph import (
     _structured_validation_result,
     apply_updates,
@@ -13,6 +16,10 @@ from graph.graph import (
     run_structured_validator,
     validate_until_destination,
 )
+
+
+def build_memory_graph():
+    return build_graph(checkpointer=MemorySaver())
 
 
 def test_initial_trip_state_has_expected_defaults() -> None:
@@ -290,6 +297,25 @@ def test_structured_validation_result_ends_error_when_no_candidates_remain() -> 
 
 
 def test_build_graph_compiles_with_checkpointer() -> None:
+    graph = build_memory_graph()
+
+    assert graph is not None
+
+
+def test_build_graph_uses_runtime_checkpointer_by_default(monkeypatch) -> None:
+    calls = []
+
+    def fake_create_runtime_checkpointer():
+        calls.append("created")
+        return MemorySaver()
+
+    monkeypatch.setattr(
+        graph_module,
+        "create_runtime_checkpointer",
+        fake_create_runtime_checkpointer,
+    )
+
     graph = build_graph()
 
     assert graph is not None
+    assert calls == ["created"]

@@ -498,7 +498,7 @@ picnix/
 - All node functions must have type hints and a one-paragraph docstring explaining what they read from state and what they write to state
 - All Google Maps API calls must be wrapped in try/except with explicit error messages — never let an API failure crash the graph silently
 - No hardcoded strings outside of `config/settings.py` and the interest→type map in N2
-- The LangGraph graph must be compiled with a `MemorySaver` checkpointer from day one — this is required for the human interrupt to work
+- The LangGraph graph must be compiled with a PostgreSQL-backed checkpointer in production so human interrupts and N8 parked threads survive restarts
 - Use `python-dotenv` and never reference `os.environ` directly — always go through `config/settings.py`
 
 ---

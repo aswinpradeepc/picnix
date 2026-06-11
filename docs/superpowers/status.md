@@ -1,6 +1,6 @@
 # Picnix Project Status
 
-Last updated: 2026-06-11 (BACKEND-PERSIST-2: dependency and Docker Compose infrastructure setup for PostgreSQL persistence)
+Last updated: 2026-06-11 (BACKEND-PERSIST-3: PostgreSQL schema initialization and LangGraph Postgres checkpointing)
 
 ## Source Of Truth
 
@@ -28,7 +28,7 @@ Last updated: 2026-06-11 (BACKEND-PERSIST-2: dependency and Docker Compose infra
 - N7 GeoJSON formatter that builds `final_geojson` from route/timeline (one Point per stop labelled "Stop N", full multi-stop LineString, leave-stop pins skipped) and copies `itinerary_draft` to `final_itinerary`. (CS4)
 - N8 plan editor: after the plan is shown the graph parks at `interrupt_before=["n8_editor"]`; a natural-language edit resumes N8 → N4 → N5 → N6 → N7 and parks again. One `gemini-3.1-pro-preview` call returns place IDs from the closed validated pool under an enforced `response_schema`; pure-Python `apply_edit_result` maps IDs to real dicts, validates timing changes, and never writes an empty stop list. (CS5, ADR-008)
 - LangGraph wiring now runs `n4_route → n5_validator → n6_composer → n7_formatter → n8_editor → n4_route` (N7→N8 unconditional; END only from N5's no-stops path and the multiday dead end); N5 errors with surviving stops route back to `n4_route` to re-plan.
-- `app.py` drives the compiled graph: one MemorySaver thread per Streamlit session, panel dispatch off `graph.get_state(config).next`, and `advance_graph` auto-resumes every confirmed `n4_route` pause (edit re-entries and N5 replans) so the gallery only renders for the initial selection. (CS5)
+- `app.py` drives the compiled graph: one Postgres-backed LangGraph thread per Streamlit session, panel dispatch off `graph.get_state(config).next`, and `advance_graph` auto-resumes every confirmed `n4_route` pause (edit re-entries and N5 replans) so the gallery only renders for the initial selection. Unit tests inject `MemorySaver`; runtime `build_graph()` defaults to `PostgresSaver`. (CS5, BACKEND-PERSIST-3)
 - Streamlit demo for chat, a scrollable multi-select destination card gallery (checkbox per card, "Confirm selection" + "Load more options"), N5 stop-removal messaging, N4 route/timeline/food preview, N6 final itinerary text, and N7 Mapbox/pydeck route rendering. (CS4)
 - `agents.md` created at project root as the shared north star for all agents working on this project. (CS0)
 - Graph viz utility at `tools/graph_viz.py` exports `docs/graph.mmd` (and `docs/graph.png` if pygraphviz is installed) when `DEBUG=true`. (CS1)
@@ -39,6 +39,7 @@ Last updated: 2026-06-11 (BACKEND-PERSIST-2: dependency and Docker Compose infra
 - Region-agnostic: N6 system prompt removes "Kerala local" identity and Malayalam warmth phrases; replaced with a locally neutral tone instruction. `docs/known-place-issues.md` cleared of Kerala-specific entries and given a region-agnostic header. `README.md` updated to remove Kerala reference. (CS8)
 - Phoenix-first observability bootstrap: `observability/bootstrap.py` calls `phoenix.otel.register(...)` and the OpenInference `LangChainInstrumentor` before graph imports in `app.py`. Controlled by `OBSERVABILITY_ENABLED=false`, `ARIZE_PRODUCT=phoenix`, and `OBSERVABILITY_CAPTURE_CONTENT=false` by default for local runs. The local Phoenix server is available through the optional `phoenix` extra. The deployment path is now a single GCP Compute Engine VM running Docker Compose with `app`, `phoenix`, and `db`; the app sends traces to `http://phoenix:6006/v1/traces`. Phoenix dashboard auth is enabled via `.env` and the app uses `PHOENIX_API_KEY` after a Phoenix system key is created. Manual node/tool spans and Arize AX are deferred. (OBS-1, DEPLOY-OBS, ADR-009, BACKEND-PERSIST-2)
 - Docker deployment artifacts: root `Dockerfile` builds the Streamlit app with `uv`; root `docker-compose.yml` runs `postgres:15`, `arizephoenix/phoenix:latest`, and the Picnix app, exposes ports 6006/4317/8501, persists Phoenix data in `phoenix-data`, persists database data in `postgres-data`, waits for Postgres health before app startup, and mounts local ADC credentials into the app container. (DEPLOY-OBS, BACKEND-PERSIST-2)
+- Database persistence module: `persistence/database.py` creates the psycopg connection pool from `DATABASE_URL`, provisions Picnix-owned `users` and `trip_runs` tables, and runs LangGraph `PostgresSaver.setup()` before graph compilation. (BACKEND-PERSIST-3)
 
 ## Current Fixed Limits
 
@@ -87,8 +88,9 @@ Backend, user management, and production persistence are now promoted into activ
 - Docker Compose now runs `app + phoenix + db`, where `db` is PostgreSQL 15 with a persistent `postgres-data` volume.
 - App configuration reads `DATABASE_URL`, defaulting to `postgresql://picnix:picnix@localhost:5432/picnix`.
 - `streamlit-authenticator`, `langgraph-checkpoint-postgres`, `psycopg`, and `psycopg-pool` are installed.
+- Runtime graph checkpointing now uses LangGraph `PostgresSaver` backed by a psycopg connection pool.
+- Database startup now provisions Picnix-owned `users` and `trip_runs` tables plus LangGraph checkpoint tables.
 - Streamlit still needs authenticated registration/login through `streamlit-authenticator`.
-- PostgreSQL still needs schema initialization for user accounts, password hashes, trial counters, and LangGraph checkpoint state.
 - Trial enforcement will block graph execution once `users.trips_planned >= 5` and will increment only after N7 successfully completes for a graph thread.
 
 Future-scope items from `design-context.md` remain out of scope unless explicitly promoted: FastAPI, production frontend, multi-day planning, Arize AX, and manual observability spans. Auth and persistence are now promoted into active scope by ADR-010.

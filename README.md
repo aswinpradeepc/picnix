@@ -10,6 +10,8 @@ From the repository root:
 uv run streamlit run app.py
 ```
 
+PostgreSQL must be reachable at `DATABASE_URL`. For the compose deployment, the `db` service provides this automatically; for local non-compose runs, start a local Postgres matching `.env.example` or set `DATABASE_URL` to your database.
+
 Then open the local URL Streamlit prints, usually:
 
 ```text
