@@ -13,3 +13,4 @@ Each ADR records a significant architectural decision: what was decided, why, wh
 | [ADR-007](ADR-007-multi-destination-routing.md) | Multi-destination routing & stop selection (CS4) | Accepted |
 | [ADR-008](ADR-008-n8-plan-editor.md) | N8 plan editor — park-at-interrupt edit loop (CS5) | Accepted |
 | [ADR-009](ADR-009-phoenix-observability.md) | Phoenix-first observability | Accepted |
+| [ADR-010](ADR-010-backend-auth-persistence.md) | Backend authentication and production persistence | Accepted |

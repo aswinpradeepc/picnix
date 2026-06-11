@@ -1,6 +1,6 @@
 # Picnix Project Status
 
-Last updated: 2026-06-11 (DEPLOY-OBS: Docker Compose app + self-hosted Phoenix verified; Phoenix auth enabled via .env)
+Last updated: 2026-06-11 (BACKEND-PERSIST-1: ADR-010 accepted for PostgreSQL, streamlit-authenticator, and LangGraph Postgres checkpointing)
 
 ## Source Of Truth
 
@@ -57,6 +57,7 @@ Last updated: 2026-06-11 (DEPLOY-OBS: Docker Compose app + self-hosted Phoenix v
 - ADR-007: Multi-destination routing & stop selection (CS4) — single `computeRoutes` call with intermediate waypoints; current visit order = candidate-list order (no optimization); current removal = N5 auto-drops the last stop. Deferred revisits documented in `docs/future-scope.md` (FS-1 stop order, FS-2 user-driven removal).
 - ADR-008: N8 plan editor (CS5) — park-at-N8 interrupt model vs. conditional N7→END, closed-universe edits with FS-3 deferral, IDs-only LLM contract, app-side auto-resume rule for the N4 interrupt.
 - ADR-009: Phoenix-first observability — Phoenix is the active milestone target via OpenInference LangChain auto-instrumentation; deployment is self-hosted Phoenix + app on one Compute Engine VM via Docker Compose; Arize AX and manual spans are deferred.
+- ADR-010: Backend authentication and production persistence — PostgreSQL 15 becomes the app persistence layer, `streamlit-authenticator` handles Streamlit registration/login, and LangGraph checkpointing moves from `MemorySaver` to a PostgreSQL-backed checkpointer.
 
 ## Deferred Discussions (Future Scope)
 
@@ -79,7 +80,17 @@ N1–N7 graph nodes and Streamlit demo are complete. Remaining change sets are f
 
 All next_milestone.md change sets (CS0–CS8) are complete. The AI layer MVP is shipped.
 
-- Future-scope items from `design-context.md` remain out of scope unless explicitly promoted: FastAPI, auth, persistence, production frontend, multi-day planning, Arize AX, and manual observability spans.
+## Active Next Milestone
+
+Backend, user management, and production persistence are now promoted into active scope under ADR-010:
+
+- Docker Compose will move from `app + phoenix` to `app + phoenix + db`, where `db` is PostgreSQL 15 with a persistent `postgres-data` volume.
+- App configuration will read `DATABASE_URL`.
+- Streamlit will add authenticated registration/login through `streamlit-authenticator`.
+- PostgreSQL will store user accounts, password hashes, trial counters, and LangGraph checkpoint state.
+- Trial enforcement will block graph execution once `users.trips_planned >= 5` and will increment only after N7 successfully completes for a graph thread.
+
+Future-scope items from `design-context.md` remain out of scope unless explicitly promoted: FastAPI, production frontend, multi-day planning, Arize AX, and manual observability spans. Auth and persistence are now promoted into active scope by ADR-010.
 
 ## Latest Checkpoint
 

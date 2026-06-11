@@ -8,7 +8,7 @@ This file is the shared reference for every agent (Claude Code, Codex, Antigravi
 
 - **Name:** Picnix
 - **Purpose:** Conversational AI trip planner. Takes user constraints via chat, builds a time-accurate itinerary, renders it on a Mapbox map.
-- **Status:** Active development. Single-user, local only. No auth, no billing, no production deployment yet.
+- **Status:** Active development. Moving from local MVP to authenticated, persistent Docker Compose deployment. No billing or production web frontend yet.
 
 ---
 
@@ -26,6 +26,9 @@ This file is the shared reference for every agent (Claude Code, Codex, Antigravi
 | Config | `python-dotenv`, `.env` file for all keys |
 | Package management | `uv`, with `pyproject.toml` and `uv.lock` |
 | Observability | Phoenix via OpenInference LangChain auto-instrumentation. Disabled by default for local runs; the Docker Compose deployment enables it and sends traces to the self-hosted Phoenix container. Local Phoenix server is optional via `uv run --extra phoenix phoenix serve`. |
+| Persistence | PostgreSQL 15 via Docker Compose `db` service; app config reads `DATABASE_URL` |
+| Graph checkpointing | LangGraph PostgreSQL checkpointer (`PostgresSaver` or connection-pool-backed equivalent) |
+| Authentication | `streamlit-authenticator` in the Streamlit frontend, backed by the PostgreSQL `users` table |
 
 **No other external planning/geo services.** No Overpass, no ORS, no OSRM, no OpenStreetMap API calls. Google Maps handles all geo data. Mapbox handles all rendering. Phoenix is allowed only for observability under ADR-009.
 
@@ -43,6 +46,7 @@ ARIZE_PROJECT_NAME=picnix-local
 OBSERVABILITY_CAPTURE_CONTENT=false
 PHOENIX_API_KEY=             # Phoenix system API key when self-hosted auth is enabled
 PHOENIX_COLLECTOR_ENDPOINT=  # optional; local Phoenix OTLP collector defaults to localhost:4317
+DATABASE_URL=                # optional; defaults to local Postgres fallback in config/settings.py
 ```
 
 ### Required Google Cloud APIs
@@ -67,20 +71,19 @@ Use `uv` for dependency management. `pyproject.toml` is the single source of tru
 - Google Maps API integrations (Places, Geocoding, Routes)
 - Mapbox rendering via pydeck
 - Phoenix observability through global OpenInference LangChain instrumentation
-- Docker Compose deployment for the observability milestone: Picnix app + self-hosted Phoenix only
+- Docker Compose deployment: Picnix app + self-hosted Phoenix + PostgreSQL
+- Streamlit authentication, persisted user accounts, and a strict 5 completed-trip trial limit per account
+- PostgreSQL-backed LangGraph checkpoint persistence
 
 ---
 
 ## What Is Explicitly Out of Scope — Do Not Build These
 
-- FastAPI endpoints
 - LangSmith observability tooling
 - Arize AX production observability
 - Manual node/tool span instrumentation
-- User authentication or session management
-- Any database or persistent storage
 - Production web frontend
-- Docker / cloud deployment beyond the current observability-only Compose stack
+- Docker / cloud deployment beyond the current Compose stack
 - Token usage tracking
 
 ---
@@ -95,6 +98,7 @@ graph/nodes/                — One file per node. Each node owns its section of
 tools/gmaps.py              — All Google Maps HTTP calls. No business logic here.
 tools/mapbox.py             — Mapbox token helpers only.
 config/settings.py          — All env var loading. No hardcoded strings elsewhere.
+db/ or persistence module    — PostgreSQL connection pooling, schema setup, user/trial helpers, LangGraph checkpointer factory.
 observability/bootstrap.py   — Phoenix/OpenInference setup. Called before graph imports; no manual spans in current scope.
 docs/known-place-issues.md  — Durable place-level exceptions. Update here, not in node code.
 agents.md                   — This file. Update when scope, stack, or ownership changes.
@@ -102,7 +106,15 @@ agents.md                   — This file. Update when scope, stack, or ownershi
 
 ---
 
-## Current Graph Topology
+## Current Graph Topology / Architecture Flow
+
+Runtime containers:
+
+```
+Browser → Streamlit app → LangGraph N1-N8
+                     ↘ PostgreSQL db (users, trial counters, LangGraph checkpoints)
+                     ↘ Phoenix (OpenInference traces)
+```
 
 ```
 N1 (intent) → conditional edge → N2 (isochrone) → N3 (validator) →
@@ -130,7 +142,7 @@ Node responsibilities at a glance:
 - All node functions must have type hints and a one-paragraph docstring explaining what they read from state and what they write to state.
 - All Google Maps API calls must be wrapped in try/except with explicit error messages — never let an API failure crash the graph silently.
 - No hardcoded strings outside of `config/settings.py` and the interest→type map in N2.
-- The LangGraph graph must be compiled with a `MemorySaver` checkpointer from day one — this is required for the human interrupt to work.
+- The LangGraph graph must be compiled with a PostgreSQL-backed checkpointer in production so human interrupts and N8 parked threads survive restarts.
 - Use `python-dotenv` and never reference `os.environ` directly — always go through `config/settings.py`.
 
 ---
@@ -154,3 +166,4 @@ Node responsibilities at a glance:
 | 2026-06-10 | CS8 | Region-agnostic. N6 system prompt: removed "Kerala local" identity and Malayalam warmth phrases; replaced with locally neutral tone instruction. known-place-issues.md: removed Kerala-specific rows (Anamudi Peak, Eravikulam NP), added region-agnostic header. README: removed Kerala reference, generalised GOOGLE_CLOUD_LOCATION example. |
 | 2026-06-11 | OBS-1 | Phoenix-first observability. Added ADR-009, Phoenix/OpenInference env vars, global LangChain/LangGraph auto-instrumentation bootstrap, optional local Phoenix server extra, and deferred Arize AX/manual spans to future scope. |
 | 2026-06-11 | DEPLOY-OBS | Docker Compose observability deployment: app + self-hosted Phoenix on one GCP Compute Engine VM, Phoenix auth env wiring, app traces routed to `http://phoenix:6006/v1/traces`. |
+| 2026-06-11 | BACKEND-PERSIST-1 | Phase 1 docs for backend/auth/persistence milestone. Added ADR-010, moved auth/database out of hard out-of-scope, and documented PostgreSQL + streamlit-authenticator + LangGraph Postgres checkpointing direction. |

@@ -6,26 +6,31 @@ You are starting a greenfield Python project. Read this entire brief before writ
 
 ## What this is
 
-A conversational AI trip planner for people in Kerala, India who want to spend free time — a weekend, an evening, a day off — without having a plan. The system has a conversation with the user, figures out their constraints, picks a suitable destination, and builds a complete, time-accurate itinerary. It then renders that itinerary on a Mapbox map with waypoints, travel times, food stops, and notes.
+A conversational AI trip planner for people who want to spend free time — a weekend, an evening, a day off — without having a plan. The system has a conversation with the user, figures out their constraints, picks a suitable destination, and builds a complete, time-accurate itinerary. It then renders that itinerary on a Mapbox map with waypoints, travel times, food stops, and notes.
 
-This is a personal / non-commercial project. No monetisation, no user accounts, no billing system yet.
+This is a personal / non-commercial project. No monetisation or billing system yet. User accounts and persistence are now active scope under ADR-010.
 
 ---
 
-## Scope for this build — STRICT
+## Scope for this build — UPDATED 2026-06-11
 
-Build ONLY these two things:
+The original MVP build was limited to these two things:
 
 1. **The AI layer** — a LangGraph graph with 7 nodes (described below)
 2. **A Streamlit UI** — for testing the AI layer interactively, with a chat panel and a Mapbox map panel
 
+The current milestone keeps the Streamlit app and LangGraph graph, and promotes backend authentication and persistence into active scope:
+
+- PostgreSQL 15 in Docker Compose as the `db` service
+- `streamlit-authenticator` for Streamlit registration/login
+- PostgreSQL-backed LangGraph checkpointing
+- strict 5 completed-trip trial limit per account
+
 Do NOT build any of the following right now. Leave clean interfaces for them to be added later:
 - FastAPI endpoints
 - Token usage calculators or cost tracking
-- User authentication or session management
 - A production web frontend
-- LangSmith or any observability tooling
-- Any database or persistent storage
+- LangSmith or Arize AX production observability tooling
 
 ---
 
@@ -42,6 +47,8 @@ Do NOT build any of the following right now. Leave clean interfaces for them to 
 | UI framework | Streamlit |
 | Config | `python-dotenv`, `.env` file for all keys |
 | Package management | `uv`, with `pyproject.toml` and `uv.lock` |
+| Persistence | PostgreSQL 15 |
+| Authentication | `streamlit-authenticator` |
 
 **No other external services.** No Overpass, no ORS, no OSRM, no OpenStreetMap API calls. Google Maps handles all geo data. Mapbox handles all rendering.
 
