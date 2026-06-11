@@ -1,4 +1,20 @@
 services:
+  db:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-picnix}
+      POSTGRES_USER: ${POSTGRES_USER:-picnix}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-picnix}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+
   phoenix:
     image: arizephoenix/phoenix:latest
     ports:
@@ -28,12 +44,17 @@ services:
       OBSERVABILITY_CAPTURE_CONTENT: "true"
       PHOENIX_COLLECTOR_ENDPOINT: http://phoenix:6006/v1/traces
       PHOENIX_API_KEY: ${PHOENIX_API_KEY:-}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-picnix}:${POSTGRES_PASSWORD:-picnix}@db:5432/${POSTGRES_DB:-picnix}
+      LANGGRAPH_STRICT_MSGPACK: "true"
       # Tell the app where the credentials live inside the container
       GOOGLE_APPLICATION_CREDENTIALS: /app/adc.json
     ports:
       - "8501:8501"
     depends_on:
-      - phoenix
+      phoenix:
+        condition: service_started
+      db:
+        condition: service_healthy
     restart: unless-stopped
     volumes:
       # Map your host's local ADC file directly to the container
@@ -42,3 +63,4 @@ services:
 # Top-level volumes block only holds named volumes
 volumes:
   phoenix-data:
+  postgres-data:

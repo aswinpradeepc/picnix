@@ -17,6 +17,9 @@ ARIZE_PROJECT_NAME_ENV = "ARIZE_PROJECT_NAME"
 OBSERVABILITY_CAPTURE_CONTENT_ENV = "OBSERVABILITY_CAPTURE_CONTENT"
 PHOENIX_API_KEY_ENV = "PHOENIX_API_KEY"
 PHOENIX_COLLECTOR_ENDPOINT_ENV = "PHOENIX_COLLECTOR_ENDPOINT"
+DATABASE_URL_ENV = "DATABASE_URL"
+
+LOCAL_DATABASE_URL = "postgresql://picnix:picnix@localhost:5432/picnix"
 
 REQUIRED_ENV_KEYS = (
     GOOGLE_MAPS_API_KEY_ENV,
@@ -40,6 +43,7 @@ class Settings:
     observability_capture_content: bool = False
     phoenix_api_key: str = ""
     phoenix_collector_endpoint: str = ""
+    database_url: str = LOCAL_DATABASE_URL
 
     @property
     def vertex_auth_mode(self) -> str:
@@ -73,6 +77,7 @@ def load_settings(env_file: str | Path = ".env", *, override: bool = False) -> S
         observability_capture_content=_env_bool(OBSERVABILITY_CAPTURE_CONTENT_ENV),
         phoenix_api_key=_env_value(PHOENIX_API_KEY_ENV),
         phoenix_collector_endpoint=_env_value(PHOENIX_COLLECTOR_ENDPOINT_ENV),
+        database_url=_env_value(DATABASE_URL_ENV) or LOCAL_DATABASE_URL,
     )
 
 
@@ -105,3 +110,4 @@ ARIZE_PROJECT_NAME = SETTINGS.arize_project_name
 OBSERVABILITY_CAPTURE_CONTENT = SETTINGS.observability_capture_content
 PHOENIX_API_KEY = SETTINGS.phoenix_api_key
 PHOENIX_COLLECTOR_ENDPOINT = SETTINGS.phoenix_collector_endpoint
+DATABASE_URL = SETTINGS.database_url

@@ -20,6 +20,11 @@ OPTIONAL_ENV_KEYS = [
     "OBSERVABILITY_CAPTURE_CONTENT",
     "PHOENIX_API_KEY",
     "PHOENIX_COLLECTOR_ENDPOINT",
+    "POSTGRES_DB",
+    "POSTGRES_USER",
+    "POSTGRES_PASSWORD",
+    "DATABASE_URL",
+    "LANGGRAPH_STRICT_MSGPACK",
     "PHOENIX_ENABLE_AUTH",
     "PHOENIX_SECRET",
     "PHOENIX_DEFAULT_ADMIN_INITIAL_PASSWORD",
@@ -40,6 +45,11 @@ ENV_EXAMPLE_EXPECTED_LINES = {
     "OBSERVABILITY_CAPTURE_CONTENT": "OBSERVABILITY_CAPTURE_CONTENT=false",
     "PHOENIX_API_KEY": "PHOENIX_API_KEY=",
     "PHOENIX_COLLECTOR_ENDPOINT": "PHOENIX_COLLECTOR_ENDPOINT=",
+    "POSTGRES_DB": "POSTGRES_DB=picnix",
+    "POSTGRES_USER": "POSTGRES_USER=picnix",
+    "POSTGRES_PASSWORD": "POSTGRES_PASSWORD=picnix",
+    "DATABASE_URL": "DATABASE_URL=postgresql://picnix:picnix@localhost:5432/picnix",
+    "LANGGRAPH_STRICT_MSGPACK": "LANGGRAPH_STRICT_MSGPACK=true",
     "PHOENIX_ENABLE_AUTH": "PHOENIX_ENABLE_AUTH=false",
     "PHOENIX_SECRET": "PHOENIX_SECRET=",
     "PHOENIX_DEFAULT_ADMIN_INITIAL_PASSWORD": "PHOENIX_DEFAULT_ADMIN_INITIAL_PASSWORD=",
@@ -89,6 +99,7 @@ def test_load_settings_reads_dotenv_file(tmp_path: Path, monkeypatch) -> None:
                 "OBSERVABILITY_CAPTURE_CONTENT=true",
                 "PHOENIX_API_KEY=phoenix-key",
                 "PHOENIX_COLLECTOR_ENDPOINT=http://phoenix.example:6006",
+                "DATABASE_URL=postgresql://picnix:secret@db:5432/picnix",
             ]
         ),
         encoding="utf-8",
@@ -110,6 +121,7 @@ def test_load_settings_reads_dotenv_file(tmp_path: Path, monkeypatch) -> None:
     assert settings.observability_capture_content is True
     assert settings.phoenix_api_key == "phoenix-key"
     assert settings.phoenix_collector_endpoint == "http://phoenix.example:6006"
+    assert settings.database_url == "postgresql://picnix:secret@db:5432/picnix"
     assert settings_module.missing_required_keys(settings) == []
 
 
@@ -139,6 +151,7 @@ def test_missing_required_keys_reports_blank_values(tmp_path: Path, monkeypatch)
         "GOOGLE_CLOUD_PROJECT",
         "GOOGLE_CLOUD_LOCATION",
     ]
+    assert settings.database_url == settings_module.LOCAL_DATABASE_URL
 
 
 def test_service_account_path_switches_vertex_auth_mode(tmp_path: Path, monkeypatch) -> None:

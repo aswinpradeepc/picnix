@@ -80,8 +80,9 @@ If tracing is enabled before Phoenix is reachable, the app keeps running and Ope
 
 ## Docker Compose Deployment
 
-The current deployment target is a single GCP Compute Engine VM running Docker Compose. The compose stack runs exactly two services:
+The current deployment target is a single GCP Compute Engine VM running Docker Compose. The compose stack runs three services:
 
+- `db` — PostgreSQL 15 with data persisted in the `postgres-data` volume.
 - `phoenix` — self-hosted Phoenix UI and OTLP trace collector.
 - `app` — Picnix Streamlit app, sending traces to `http://phoenix:6006/v1/traces` over the compose network.
 
@@ -92,6 +93,11 @@ GOOGLE_MAPS_API_KEY=
 MAPBOX_TOKEN=
 GOOGLE_CLOUD_PROJECT=
 GOOGLE_CLOUD_LOCATION=global
+
+POSTGRES_DB=picnix
+POSTGRES_USER=picnix
+POSTGRES_PASSWORD=<strong database password>
+LANGGRAPH_STRICT_MSGPACK=true
 
 PHOENIX_ENABLE_AUTH=true
 PHOENIX_SECRET=<generate with: openssl rand -hex 32>
@@ -119,6 +125,8 @@ After first login, create a Phoenix system API key from settings, write it into 
 ```bash
 docker compose up -d --build app
 ```
+
+The compose file builds `DATABASE_URL` for the app from the `POSTGRES_*` values and waits for Postgres to report healthy before starting Streamlit.
 
 The app is available at `http://<VM_EXTERNAL_IP>:8501`. The Phoenix dashboard is available at `http://<VM_EXTERNAL_IP>:6006`.
 

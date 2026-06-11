@@ -1,6 +1,6 @@
 # Picnix Project Status
 
-Last updated: 2026-06-11 (BACKEND-PERSIST-1: ADR-010 accepted for PostgreSQL, streamlit-authenticator, and LangGraph Postgres checkpointing)
+Last updated: 2026-06-11 (BACKEND-PERSIST-2: dependency and Docker Compose infrastructure setup for PostgreSQL persistence)
 
 ## Source Of Truth
 
@@ -37,8 +37,8 @@ Last updated: 2026-06-11 (BACKEND-PERSIST-1: ADR-010 accepted for PostgreSQL, st
 - Google Maps deep-link export: `tools/gmaps.py` `generate_gmaps_link(timeline)` builds a round-trip URL (origin=start, destination=start, waypoints=all destination stops); rendered as `st.link_button("Open in Google Maps 🗺️")` after the final itinerary. (CS6)
 - N6 itinerary format updated to hybrid: one bold section header per stop + one punchy vibe sentence + 1–2 bullet points for must-know facts. (CS7)
 - Region-agnostic: N6 system prompt removes "Kerala local" identity and Malayalam warmth phrases; replaced with a locally neutral tone instruction. `docs/known-place-issues.md` cleared of Kerala-specific entries and given a region-agnostic header. `README.md` updated to remove Kerala reference. (CS8)
-- Phoenix-first observability bootstrap: `observability/bootstrap.py` calls `phoenix.otel.register(...)` and the OpenInference `LangChainInstrumentor` before graph imports in `app.py`. Controlled by `OBSERVABILITY_ENABLED=false`, `ARIZE_PRODUCT=phoenix`, and `OBSERVABILITY_CAPTURE_CONTENT=false` by default for local runs. The local Phoenix server is available through the optional `phoenix` extra. The deployment path is now a single GCP Compute Engine VM running Docker Compose with exactly two services: `app` and `phoenix`; the app sends traces to `http://phoenix:6006/v1/traces`. Phoenix dashboard auth is enabled via `.env` and the app uses `PHOENIX_API_KEY` after a Phoenix system key is created. Manual node/tool spans and Arize AX are deferred. (OBS-1, DEPLOY-OBS, ADR-009)
-- Docker deployment artifacts: root `Dockerfile` builds the Streamlit app with `uv`; root `docker-compose.yml` runs `arizephoenix/phoenix:latest` plus the Picnix app, exposes ports 6006/4317/8501, persists Phoenix data in `phoenix-data`, and mounts local ADC credentials into the app container.
+- Phoenix-first observability bootstrap: `observability/bootstrap.py` calls `phoenix.otel.register(...)` and the OpenInference `LangChainInstrumentor` before graph imports in `app.py`. Controlled by `OBSERVABILITY_ENABLED=false`, `ARIZE_PRODUCT=phoenix`, and `OBSERVABILITY_CAPTURE_CONTENT=false` by default for local runs. The local Phoenix server is available through the optional `phoenix` extra. The deployment path is now a single GCP Compute Engine VM running Docker Compose with `app`, `phoenix`, and `db`; the app sends traces to `http://phoenix:6006/v1/traces`. Phoenix dashboard auth is enabled via `.env` and the app uses `PHOENIX_API_KEY` after a Phoenix system key is created. Manual node/tool spans and Arize AX are deferred. (OBS-1, DEPLOY-OBS, ADR-009, BACKEND-PERSIST-2)
+- Docker deployment artifacts: root `Dockerfile` builds the Streamlit app with `uv`; root `docker-compose.yml` runs `postgres:15`, `arizephoenix/phoenix:latest`, and the Picnix app, exposes ports 6006/4317/8501, persists Phoenix data in `phoenix-data`, persists database data in `postgres-data`, waits for Postgres health before app startup, and mounts local ADC credentials into the app container. (DEPLOY-OBS, BACKEND-PERSIST-2)
 
 ## Current Fixed Limits
 
@@ -84,10 +84,11 @@ All next_milestone.md change sets (CS0–CS8) are complete. The AI layer MVP is 
 
 Backend, user management, and production persistence are now promoted into active scope under ADR-010:
 
-- Docker Compose will move from `app + phoenix` to `app + phoenix + db`, where `db` is PostgreSQL 15 with a persistent `postgres-data` volume.
-- App configuration will read `DATABASE_URL`.
-- Streamlit will add authenticated registration/login through `streamlit-authenticator`.
-- PostgreSQL will store user accounts, password hashes, trial counters, and LangGraph checkpoint state.
+- Docker Compose now runs `app + phoenix + db`, where `db` is PostgreSQL 15 with a persistent `postgres-data` volume.
+- App configuration reads `DATABASE_URL`, defaulting to `postgresql://picnix:picnix@localhost:5432/picnix`.
+- `streamlit-authenticator`, `langgraph-checkpoint-postgres`, `psycopg`, and `psycopg-pool` are installed.
+- Streamlit still needs authenticated registration/login through `streamlit-authenticator`.
+- PostgreSQL still needs schema initialization for user accounts, password hashes, trial counters, and LangGraph checkpoint state.
 - Trial enforcement will block graph execution once `users.trips_planned >= 5` and will increment only after N7 successfully completes for a graph thread.
 
 Future-scope items from `design-context.md` remain out of scope unless explicitly promoted: FastAPI, production frontend, multi-day planning, Arize AX, and manual observability spans. Auth and persistence are now promoted into active scope by ADR-010.
