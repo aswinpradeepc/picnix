@@ -19,6 +19,7 @@ from graph.graph import (
     selection_updates,
 )
 from persistence.database import (
+    PlanHistoryItem,
     TRIAL_LIMIT,
     create_connection_pool,
     create_postgres_checkpointer,
@@ -26,6 +27,7 @@ from persistence.database import (
     get_trips_planned,
     has_trial_capacity,
     initialize_picnix_schema,
+    list_plan_history,
     load_auth_credentials,
     mark_trip_completed,
     normalize_username,
@@ -130,6 +132,8 @@ def final_geojson_center(final_geojson: dict) -> dict:
 
 
 MAX_AUTO_RESUMES = 10
+MAX_HISTORY_ITEMS = 20
+PLAN_WIDGET_KEY_PREFIXES = ("select_dest_", "clarify_opt_")
 
 
 def validate_signup_fields(
@@ -153,6 +157,83 @@ def validate_signup_fields(
     if password != password_repeat:
         errors.append("Passwords do not match.")
     return errors
+
+
+def _compact_text(value: str, *, max_length: int = 72) -> str:
+    cleaned = " ".join(value.split())
+    if len(cleaned) <= max_length:
+        return cleaned
+    return cleaned[: max_length - 3].rstrip() + "..."
+
+
+def _destination_names(state: dict) -> list[str]:
+    destinations = state.get("selected_destinations", [])
+    if not isinstance(destinations, list):
+        return []
+    return [
+        str(destination.get("name", "")).strip()
+        for destination in destinations
+        if isinstance(destination, dict) and str(destination.get("name", "")).strip()
+    ]
+
+
+def plan_history_title(state: dict) -> str:
+    constraints = state.get("constraints", {})
+    start_location = ""
+    if isinstance(constraints, dict):
+        start_location = str(constraints.get("start_location", "")).strip()
+    destination_names = _destination_names(state)
+
+    if destination_names:
+        destination_text = ", ".join(destination_names[:2])
+        if len(destination_names) > 2:
+            destination_text = f"{destination_text} + {len(destination_names) - 2} more"
+        if start_location:
+            return _compact_text(f"{start_location} to {destination_text}")
+        return _compact_text(destination_text)
+    if start_location:
+        return _compact_text(f"Trip from {start_location}")
+    return "Untitled plan"
+
+
+def plan_history_summary(state: dict) -> dict[str, Any]:
+    constraints = state.get("constraints", {})
+    route = state.get("route", {})
+    safe_constraints = constraints if isinstance(constraints, dict) else {}
+    safe_route = route if isinstance(route, dict) else {}
+    return {
+        "start_location": safe_constraints.get("start_location", ""),
+        "duration_hours": safe_constraints.get("duration_hours"),
+        "vehicle": safe_constraints.get("vehicle", ""),
+        "interests": safe_constraints.get("interests", []),
+        "destinations": _destination_names(state),
+        "total_distance_meters": safe_route.get("total_distance_meters"),
+        "planned_duration_seconds": safe_route.get("planned_duration_seconds"),
+    }
+
+
+def _format_completed_at(value: Any) -> str:
+    if hasattr(value, "strftime"):
+        return value.strftime("%b %d, %Y %H:%M")
+    return str(value or "").strip()
+
+
+def plan_history_caption(item: PlanHistoryItem) -> str:
+    summary = item.plan_summary or {}
+    parts: list[str] = []
+    completed_at = _format_completed_at(item.completed_at)
+    if completed_at:
+        parts.append(completed_at)
+    destinations = summary.get("destinations", [])
+    if isinstance(destinations, list) and destinations:
+        parts.append(f"{len(destinations)} stop{'s' if len(destinations) != 1 else ''}")
+    distance = summary.get("total_distance_meters")
+    if distance:
+        parts.append(format_km(distance))
+    duration = summary.get("planned_duration_seconds")
+    if duration:
+        parts.append(format_duration(duration))
+    return " · ".join(parts) or "Completed plan"
 
 
 def is_completed_plan_snapshot(snapshot: Any) -> bool:
@@ -217,15 +298,53 @@ def graph_execution_allowed(username: str) -> bool:
     return False
 
 
+def _clear_plan_widget_state() -> None:
+    for key in list(st.session_state.keys()):
+        if str(key).startswith(PLAN_WIDGET_KEY_PREFIXES):
+            st.session_state.pop(key, None)
+
+
+def _synced_completed_threads() -> set[str]:
+    if "synced_completed_threads" not in st.session_state:
+        st.session_state.synced_completed_threads = set()
+    return st.session_state.synced_completed_threads
+
+
+def _reset_plan_session(thread_id: str) -> None:
+    st.session_state.thread_id = thread_id
+    st.session_state.partial_demo_notice = ""
+    st.session_state.edit_in_flight = False
+    st.session_state.limit_reached_notice = ""
+    _clear_plan_widget_state()
+
+
+def start_new_plan_thread() -> None:
+    _reset_plan_session(str(uuid.uuid4()))
+    get_graph().invoke(initial_trip_state(), thread_config())
+
+
+def load_plan_thread(thread_id: str) -> None:
+    _reset_plan_session(thread_id)
+
+
 def record_completed_trip_if_ready(username: str, snapshot: Any) -> None:
     if not is_completed_plan_snapshot(snapshot):
         return
+    thread_id = st.session_state.thread_id
+    synced_threads = _synced_completed_threads()
+    if thread_id in synced_threads:
+        return
+    state = dict(snapshot.values)
     if mark_trip_completed(
         get_database_pool(),
         username=username,
-        thread_id=st.session_state.thread_id,
+        thread_id=thread_id,
+        title=plan_history_title(state),
+        plan_summary=plan_history_summary(state),
+        final_itinerary=str(state.get("final_itinerary") or ""),
     ):
         st.session_state.partial_demo_notice = "Plan ready."
+    synced_threads.add(thread_id)
 
 
 def thread_config() -> dict:
@@ -245,16 +364,14 @@ def sync_authenticated_user(username: str) -> None:
         "partial_demo_notice",
         "edit_in_flight",
         "limit_reached_notice",
+        "synced_completed_threads",
     ):
         st.session_state.pop(key, None)
 
 
 def ensure_session_state() -> None:
     if "thread_id" not in st.session_state:
-        st.session_state.thread_id = str(uuid.uuid4())
-        # First run: N1 writes the greeting, the conditional edge routes to END,
-        # and the thread waits for the first user message.
-        get_graph().invoke(initial_trip_state(), thread_config())
+        start_new_plan_thread()
     if "partial_demo_notice" not in st.session_state:
         st.session_state.partial_demo_notice = ""
     if "edit_in_flight" not in st.session_state:
@@ -559,6 +676,7 @@ def render_plan_editor(state: dict) -> None:
         username = authenticated_username()
         if not graph_execution_allowed(username):
             st.rerun()
+        _synced_completed_threads().discard(st.session_state.thread_id)
         st.session_state.edit_in_flight = True
         graph = get_graph()
         config = thread_config()
@@ -669,6 +787,41 @@ def render_account_sidebar(
         st.caption(f"Signed in as {username}")
         st.progress(min(trips_planned, TRIAL_LIMIT) / TRIAL_LIMIT)
         st.caption(f"{min(trips_planned, TRIAL_LIMIT)}/{TRIAL_LIMIT} completed trips")
+        st.divider()
+
+        can_start_plan = trips_planned < TRIAL_LIMIT
+        if st.button(
+            "New plan",
+            use_container_width=True,
+            disabled=not can_start_plan,
+        ):
+            start_new_plan_thread()
+            st.rerun()
+        if not can_start_plan:
+            st.caption("Trial limit reached — previous plans remain available.")
+
+        st.subheader("Previous plans")
+        history = list_plan_history(
+            get_database_pool(),
+            username,
+            limit=MAX_HISTORY_ITEMS,
+        )
+        if not history:
+            st.caption("Completed plans will appear here.")
+        for item in history:
+            is_current = st.session_state.get("thread_id") == item.thread_id
+            if st.button(
+                item.title,
+                key=f"history_{item.thread_id}",
+                help=plan_history_caption(item),
+                use_container_width=True,
+                disabled=is_current,
+            ):
+                load_plan_thread(item.thread_id)
+                st.rerun()
+            st.caption(plan_history_caption(item))
+
+        st.divider()
         authenticator.logout("Logout", location="sidebar", key="picnix_logout")
 
 

@@ -67,7 +67,9 @@ def test_initialize_picnix_schema_executes_all_schema_statements() -> None:
     assert executed == list(database.PICNIX_SCHEMA_STATEMENTS)
     assert "CREATE TABLE IF NOT EXISTS users" in executed[0]
     assert "CREATE TABLE IF NOT EXISTS trip_runs" in executed[1]
-    assert "CREATE UNIQUE INDEX IF NOT EXISTS trip_runs_one_running_per_user" in executed[2]
+    assert "ALTER TABLE trip_runs" in executed[2]
+    assert "CREATE UNIQUE INDEX IF NOT EXISTS trip_runs_one_running_per_user" in executed[6]
+    assert "CREATE INDEX IF NOT EXISTS trip_runs_history_by_user_completed_at" in executed[7]
 
 
 def test_load_auth_credentials_shapes_rows_for_streamlit_authenticator() -> None:
@@ -274,16 +276,21 @@ def test_mark_trip_completed_increments_once_for_new_thread() -> None:
         FakeConnection(),
         username="Alice",
         thread_id="thread-1",
+        title="Kochi to Athirappilly",
+        plan_summary={"destinations": ["Athirappilly"]},
+        final_itinerary="Plan prose",
     )
 
     assert counted is True
-    assert calls[0][1] == ("alice", "thread-1")
+    assert calls[0][1][0:3] == ("alice", "thread-1", "Kochi to Athirappilly")
+    assert calls[0][1][4] == "Plan prose"
     assert calls[1][1] == ("alice", database.TRIAL_LIMIT)
-    assert calls[2][1] == ("alice", "thread-1")
+    assert calls[2][1][0] == "Kochi to Athirappilly"
+    assert calls[2][1][2:] == ("Plan prose", "alice", "thread-1")
 
 
 def test_mark_trip_completed_does_not_double_count_existing_counted_thread() -> None:
-    calls: list[str] = []
+    calls: list[tuple[str, tuple | None]] = []
 
     class FakeTransaction:
         def __enter__(self):
@@ -304,8 +311,8 @@ def test_mark_trip_completed_does_not_double_count_existing_counted_thread() -> 
         def __exit__(self, *args) -> None:
             return None
 
-        def execute(self, statement: str, _params: tuple | None = None) -> None:
-            calls.append(statement)
+        def execute(self, statement: str, params: tuple | None = None) -> None:
+            calls.append((statement, params))
 
         def fetchone(self):
             if not self.fetches:
@@ -326,7 +333,60 @@ def test_mark_trip_completed_does_not_double_count_existing_counted_thread() -> 
     )
 
     assert counted is False
-    assert len(calls) == 2
+    assert len(calls) == 3
+    assert calls[2][1][3:] == ("alice", "thread-1")
+
+
+def test_list_plan_history_returns_completed_counted_plans_newest_first() -> None:
+    calls: list[tuple[str, tuple | None]] = []
+
+    class FakeCursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args) -> None:
+            return None
+
+        def execute(self, statement: str, params: tuple | None = None) -> None:
+            calls.append((statement, params))
+
+        def fetchall(self) -> list[dict]:
+            return [
+                {
+                    "thread_id": "thread-2",
+                    "title": "Kochi to Fort Kochi",
+                    "plan_summary": {"destinations": ["Fort Kochi"]},
+                    "completed_at": "2026-06-11T16:00:00Z",
+                },
+                {
+                    "thread_id": "thread-1",
+                    "title": "",
+                    "plan_summary": None,
+                    "completed_at": None,
+                },
+            ]
+
+    class FakeConnection:
+        def cursor(self) -> FakeCursor:
+            return FakeCursor()
+
+    history = database.list_plan_history(FakeConnection(), " Alice ", limit=5)
+
+    assert calls[0][1] == ("alice", 5)
+    assert history == [
+        database.PlanHistoryItem(
+            thread_id="thread-2",
+            title="Kochi to Fort Kochi",
+            plan_summary={"destinations": ["Fort Kochi"]},
+            completed_at="2026-06-11T16:00:00Z",
+        ),
+        database.PlanHistoryItem(
+            thread_id="thread-1",
+            title="Untitled plan",
+            plan_summary={},
+            completed_at=None,
+        ),
+    ]
 
 
 def test_create_runtime_checkpointer_initializes_schema_then_checkpointer(monkeypatch) -> None:

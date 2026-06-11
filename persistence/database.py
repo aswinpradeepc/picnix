@@ -7,6 +7,7 @@ from typing import Any
 
 from langgraph.checkpoint.postgres import PostgresSaver
 from psycopg.rows import dict_row
+from psycopg.types.json import Jsonb
 from psycopg_pool import ConnectionPool
 
 from config.settings import SETTINGS, Settings
@@ -37,9 +38,33 @@ CREATE TABLE IF NOT EXISTS trip_runs (
     thread_id TEXT NOT NULL UNIQUE,
     status TEXT NOT NULL CHECK (status IN ('running', 'completed', 'failed')),
     count_applied BOOLEAN NOT NULL DEFAULT false,
+    title TEXT NOT NULL DEFAULT 'Untitled plan',
+    plan_summary JSONB NOT NULL DEFAULT '{}'::jsonb,
+    final_itinerary TEXT NOT NULL DEFAULT '',
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-    completed_at TIMESTAMPTZ
+    completed_at TIMESTAMPTZ,
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+"""
+
+ADD_TRIP_RUNS_TITLE_SQL = """
+ALTER TABLE trip_runs
+ADD COLUMN IF NOT EXISTS title TEXT NOT NULL DEFAULT 'Untitled plan';
+"""
+
+ADD_TRIP_RUNS_PLAN_SUMMARY_SQL = """
+ALTER TABLE trip_runs
+ADD COLUMN IF NOT EXISTS plan_summary JSONB NOT NULL DEFAULT '{}'::jsonb;
+"""
+
+ADD_TRIP_RUNS_FINAL_ITINERARY_SQL = """
+ALTER TABLE trip_runs
+ADD COLUMN IF NOT EXISTS final_itinerary TEXT NOT NULL DEFAULT '';
+"""
+
+ADD_TRIP_RUNS_UPDATED_AT_SQL = """
+ALTER TABLE trip_runs
+ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ NOT NULL DEFAULT now();
 """
 
 CREATE_TRIP_RUNS_RUNNING_INDEX_SQL = """
@@ -48,10 +73,21 @@ ON trip_runs(username)
 WHERE status = 'running';
 """
 
+CREATE_TRIP_RUNS_HISTORY_INDEX_SQL = """
+CREATE INDEX IF NOT EXISTS trip_runs_history_by_user_completed_at
+ON trip_runs(username, completed_at DESC)
+WHERE status = 'completed' AND count_applied = true;
+"""
+
 PICNIX_SCHEMA_STATEMENTS = (
     CREATE_USERS_TABLE_SQL,
     CREATE_TRIP_RUNS_TABLE_SQL,
+    ADD_TRIP_RUNS_TITLE_SQL,
+    ADD_TRIP_RUNS_PLAN_SUMMARY_SQL,
+    ADD_TRIP_RUNS_FINAL_ITINERARY_SQL,
+    ADD_TRIP_RUNS_UPDATED_AT_SQL,
     CREATE_TRIP_RUNS_RUNNING_INDEX_SQL,
+    CREATE_TRIP_RUNS_HISTORY_INDEX_SQL,
 )
 
 
@@ -94,6 +130,14 @@ class UserRecord:
     email: str
     password_hash: str
     trips_planned: int
+
+
+@dataclass(frozen=True)
+class PlanHistoryItem:
+    thread_id: str
+    title: str
+    plan_summary: dict[str, Any]
+    completed_at: Any
 
 
 def initialize_picnix_schema(connection_source: Any) -> None:
@@ -213,21 +257,41 @@ def mark_trip_completed(
     *,
     username: str,
     thread_id: str,
+    title: str = "Untitled plan",
+    plan_summary: dict[str, Any] | None = None,
+    final_itinerary: str = "",
     limit: int = TRIAL_LIMIT,
 ) -> bool:
     """Idempotently count one completed graph thread against a user's trial limit."""
     normalized_username = normalize_username(username)
+    safe_title = title.strip() or "Untitled plan"
+    safe_summary = plan_summary or {}
     with _connection(connection_source) as connection:
         with _transaction(connection):
             with connection.cursor() as cursor:
                 cursor.execute(
                     """
-                    INSERT INTO trip_runs (username, thread_id, status, completed_at)
-                    VALUES (%s, %s, 'completed', now())
+                    INSERT INTO trip_runs (
+                        username,
+                        thread_id,
+                        status,
+                        completed_at,
+                        title,
+                        plan_summary,
+                        final_itinerary,
+                        updated_at
+                    )
+                    VALUES (%s, %s, 'completed', now(), %s, %s, %s, now())
                     ON CONFLICT (thread_id) DO NOTHING
                     RETURNING count_applied
                     """,
-                    (normalized_username, thread_id),
+                    (
+                        normalized_username,
+                        thread_id,
+                        safe_title,
+                        Jsonb(safe_summary),
+                        final_itinerary,
+                    ),
                 )
                 run_row = cursor.fetchone()
 
@@ -242,7 +306,28 @@ def mark_trip_completed(
                         (normalized_username, thread_id),
                     )
                     run_row = cursor.fetchone()
-                    if run_row is None or run_row["count_applied"]:
+                    if run_row is None:
+                        return False
+                    if run_row["count_applied"]:
+                        cursor.execute(
+                            """
+                            UPDATE trip_runs
+                            SET title = %s,
+                                plan_summary = %s,
+                                final_itinerary = %s,
+                                status = 'completed',
+                                completed_at = COALESCE(completed_at, now()),
+                                updated_at = now()
+                            WHERE username = %s AND thread_id = %s
+                            """,
+                            (
+                                safe_title,
+                                Jsonb(safe_summary),
+                                final_itinerary,
+                                normalized_username,
+                                thread_id,
+                            ),
+                        )
                         return False
 
                 cursor.execute(
@@ -264,12 +349,57 @@ def mark_trip_completed(
                     UPDATE trip_runs
                     SET count_applied = true,
                         status = 'completed',
-                        completed_at = COALESCE(completed_at, now())
+                        completed_at = COALESCE(completed_at, now()),
+                        title = %s,
+                        plan_summary = %s,
+                        final_itinerary = %s,
+                        updated_at = now()
                     WHERE username = %s AND thread_id = %s
                     """,
-                    (normalized_username, thread_id),
+                    (
+                        safe_title,
+                        Jsonb(safe_summary),
+                        final_itinerary,
+                        normalized_username,
+                        thread_id,
+                    ),
                 )
                 return True
+
+
+def list_plan_history(
+    connection_source: Any,
+    username: str,
+    *,
+    limit: int = 20,
+) -> list[PlanHistoryItem]:
+    """Return completed, counted plans for a user in newest-first order."""
+    normalized_username = normalize_username(username)
+    with _connection(connection_source) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT thread_id, title, plan_summary, completed_at
+                FROM trip_runs
+                WHERE username = %s
+                  AND status = 'completed'
+                  AND count_applied = true
+                ORDER BY completed_at DESC NULLS LAST, id DESC
+                LIMIT %s
+                """,
+                (normalized_username, limit),
+            )
+            rows = cursor.fetchall()
+
+    return [
+        PlanHistoryItem(
+            thread_id=row["thread_id"],
+            title=row["title"] or "Untitled plan",
+            plan_summary=row["plan_summary"] or {},
+            completed_at=row["completed_at"],
+        )
+        for row in rows
+    ]
 
 
 def create_postgres_checkpointer(connection_source: Any) -> PostgresSaver:

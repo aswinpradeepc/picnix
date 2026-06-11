@@ -8,9 +8,13 @@ from app import (
     format_duration,
     format_km,
     is_completed_plan_snapshot,
+    plan_history_caption,
+    plan_history_summary,
+    plan_history_title,
     timeline_rows,
     validate_signup_fields,
 )
+from persistence.database import PlanHistoryItem
 
 
 def test_format_km_formats_meters() -> None:
@@ -92,6 +96,66 @@ def test_food_availability_rows_shapes_entries_for_streamlit_table() -> None:
             "Notes": "Dinner can be at home.",
         }
     ]
+
+
+def test_plan_history_title_uses_start_and_destinations() -> None:
+    title = plan_history_title(
+        {
+            "constraints": {"start_location": "Kochi"},
+            "selected_destinations": [
+                {"name": "Fort Kochi"},
+                {"name": "Mattancherry Palace"},
+                {"name": "Marine Drive"},
+            ],
+        }
+    )
+
+    assert title == "Kochi to Fort Kochi, Mattancherry Palace + 1 more"
+
+
+def test_plan_history_summary_keeps_sidebar_safe_metadata() -> None:
+    summary = plan_history_summary(
+        {
+            "constraints": {
+                "start_location": "Kochi",
+                "duration_hours": 8,
+                "vehicle": "car",
+                "interests": ["heritage"],
+            },
+            "selected_destinations": [{"name": "Fort Kochi"}],
+            "route": {
+                "total_distance_meters": 24000,
+                "planned_duration_seconds": 14400,
+            },
+        }
+    )
+
+    assert summary == {
+        "start_location": "Kochi",
+        "duration_hours": 8,
+        "vehicle": "car",
+        "interests": ["heritage"],
+        "destinations": ["Fort Kochi"],
+        "total_distance_meters": 24000,
+        "planned_duration_seconds": 14400,
+    }
+
+
+def test_plan_history_caption_formats_completed_plan_metadata() -> None:
+    caption = plan_history_caption(
+        PlanHistoryItem(
+            thread_id="thread-1",
+            title="Kochi to Fort Kochi",
+            plan_summary={
+                "destinations": ["Fort Kochi", "Mattancherry Palace"],
+                "total_distance_meters": 24000,
+                "planned_duration_seconds": 14400,
+            },
+            completed_at="2026-06-11 16:00",
+        )
+    )
+
+    assert caption == "2026-06-11 16:00 · 2 stops · 24.0 km · 4 hr"
 
 
 def test_final_geojson_center_uses_feature_coordinates() -> None:
