@@ -16,3 +16,4 @@ Each ADR records a significant architectural decision: what was decided, why, wh
 | [ADR-010](ADR-010-backend-auth-persistence.md) | Backend authentication and production persistence | Accepted |
 | [ADR-011](ADR-011-resend-email-verification.md) | Resend email verification for Streamlit accounts | Accepted |
 | [ADR-012](ADR-012-gemini-retry-backoff.md) | Gemini rate-limit retries with Tenacity | Accepted |
+| [ADR-013](ADR-013-trip-auditor-mcp.md) | Trip Auditor — Phoenix MCP meta-agent with per-user trace scoping | Accepted |

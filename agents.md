@@ -30,8 +30,9 @@ This file is the shared reference for every agent (Claude Code, Codex, Antigravi
 | Graph checkpointing | LangGraph PostgreSQL checkpointer (`PostgresSaver` or connection-pool-backed equivalent) |
 | Authentication | `streamlit-authenticator` in the Streamlit frontend, backed by the PostgreSQL `users` table |
 | Email delivery | Resend API via the `resend` Python SDK for account verification emails |
+| Trace auditing | `pages/1_Trip_Auditor.py` meta-agent on `gemini-3.1-pro-preview`. Admin mode uses the Arize Phoenix MCP server (`npx @arizeai/phoenix-mcp`, Node.js 22 in the app image) via `langchain-mcp-adapters`; user mode uses DB-validated Python tools over the Phoenix REST API scoped by `session.id` (ADR-013) |
 
-**No other external planning/geo services.** No Overpass, no ORS, no OSRM, no OpenStreetMap API calls. Google Maps handles all geo data. Mapbox handles all rendering. Phoenix is allowed only for observability under ADR-009, and Resend is allowed only for account verification email under ADR-011.
+**No other external planning/geo services.** No Overpass, no ORS, no OSRM, no OpenStreetMap API calls. Google Maps handles all geo data. Mapbox handles all rendering. Phoenix is allowed only for observability under ADR-009 (read back by the Trip Auditor under ADR-013), and Resend is allowed only for account verification email under ADR-011.
 
 ### Environment Variables
 
@@ -50,10 +51,12 @@ ARIZE_PROJECT_NAME=picnix-local
 OBSERVABILITY_CAPTURE_CONTENT=false
 PHOENIX_API_KEY=             # Phoenix system API key when self-hosted auth is enabled
 PHOENIX_COLLECTOR_ENDPOINT=  # optional; local Phoenix OTLP collector defaults to localhost:4317
+PHOENIX_BASE_URL=            # Phoenix HTTP endpoint for the Trip Auditor; defaults to http://localhost:6006, Compose sets http://phoenix:6006
 DATABASE_URL=                # optional; defaults to local Postgres fallback in config/settings.py
 AUTH_COOKIE_NAME=picnix_auth
 AUTH_COOKIE_KEY=             # generate a strong random value for deployment
 AUTH_COOKIE_EXPIRY_DAYS=30
+ADMIN_USERNAMES=             # comma-separated usernames with full-MCP Trip Auditor access; empty = no admins
 RESEND_API_KEY=
 RESEND_FROM_EMAIL="Picnix <onboarding@resend.dev>"
 APP_BASE_URL=http://localhost:8501
@@ -85,6 +88,7 @@ Use `uv` for dependency management. `pyproject.toml` is the single source of tru
 - Streamlit authentication, persisted user accounts, and a strict 5 completed-trip trial limit per account
 - Resend email verification for new accounts before graph execution is enabled
 - PostgreSQL-backed LangGraph checkpoint persistence
+- Trip Auditor meta-agent page: per-user trace auditing for all accounts, full Phoenix MCP access for `ADMIN_USERNAMES` (ADR-013)
 
 ---
 
@@ -103,6 +107,7 @@ Use `uv` for dependency management. `pyproject.toml` is the single source of tru
 
 ```
 app.py                      — Streamlit UI. Drives the compiled graph: one thread per session, dispatches panels off graph.get_state(config).next.
+pages/1_Trip_Auditor.py     — Standalone Trip Auditor meta-agent. Never imports graph/; tool surface is the per-user privacy boundary (ADR-013).
 graph/state.py              — TripState schema. Change only when a node needs new fields.
 graph/graph.py              — Node wiring, edges, interrupt config. Change when graph topology changes.
 graph/nodes/                — One file per node. Each node owns its section of state.
@@ -188,3 +193,4 @@ Node responsibilities at a glance:
 | 2026-06-11 | BACKEND-PERSIST-4 | Phase 4 auth and trial gatekeeper. Streamlit login/sign-up uses streamlit-authenticator, users persist in Postgres with hashed passwords, graph execution is blocked at 5 completed trips, and N7 completion increments are idempotent per thread. |
 | 2026-06-11 | BACKEND-PERSIST-5 | Resend email verification. Users table gains is_verified/verification_token, existing users are grandfathered as verified, new users get one-use UUID verification links through Resend, and graph execution is blocked until email verification passes. |
 | 2026-06-11 | LLM-RETRY-1 | Gemini retry backoff. tools/vertex.py returns a retrying ChatGoogleGenerativeAI subclass with Tenacity capped exponential backoff + jitter for transient 429/RESOURCE_EXHAUSTED quota failures. |
+| 2026-06-12 | AUDITOR-1 | Trip Auditor meta-agent (ADR-013). pages/1_Trip_Auditor.py chat agent on gemini-3.1-pro-preview reads Phoenix traces: ADMIN_USERNAMES get the full @arizeai/phoenix-mcp toolset (langchain-mcp-adapters, Node.js 22 in image); other users get DB-validated tools (list_my_trips/get_trip_spans) scoped by trip_runs ownership + Phoenix REST session.id filter. New env: PHOENIX_BASE_URL, ADMIN_USERNAMES. New DB helper list_user_trip_threads. |

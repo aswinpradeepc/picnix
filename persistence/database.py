@@ -458,6 +458,37 @@ def mark_trip_completed(
                 return True
 
 
+def list_user_trip_threads(
+    connection_source: Any,
+    username: str,
+    *,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    """Return a user's trip runs (any status) newest-first for trace auditing.
+
+    Reads trip_runs rows owned by the normalized username and returns plain
+    dicts with thread_id, title, status, created_at, and completed_at. The
+    Trip Auditor page uses this as the server-side ownership boundary for
+    per-user Phoenix trace access.
+    """
+    normalized_username = normalize_username(username)
+    with _connection(connection_source) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT thread_id, title, status, created_at, completed_at
+                FROM trip_runs
+                WHERE username = %s
+                ORDER BY created_at DESC, id DESC
+                LIMIT %s
+                """,
+                (normalized_username, limit),
+            )
+            rows = cursor.fetchall()
+
+    return [dict(row) for row in rows]
+
+
 def list_plan_history(
     connection_source: Any,
     username: str,

@@ -50,6 +50,8 @@ LLM_RETRY_BACKOFF_MAX_SECONDS=30
 RESEND_API_KEY=
 RESEND_FROM_EMAIL="Picnix <onboarding@resend.dev>"
 APP_BASE_URL=http://localhost:8501
+# Optional: Trip Auditor access — comma-separated usernames get full-MCP admin scope
+ADMIN_USERNAMES=
 ```
 
 For local Vertex AI auth, prefer Application Default Credentials and leave `GOOGLE_APPLICATION_CREDENTIALS` blank unless you are using a service account JSON:
@@ -86,6 +88,10 @@ ARIZE_PROJECT_NAME=picnix-local
 Then run Picnix normally. Local Phoenix accepts traces on its default OTLP collector (`localhost:4317`), so `PHOENIX_COLLECTOR_ENDPOINT` can stay blank.
 If tracing is enabled before Phoenix is reachable, the app keeps running and OpenTelemetry will log exporter warnings until a collector is available.
 
+## Trip Auditor
+
+The Streamlit sidebar exposes a second page, **Trip Auditor** — a standalone Gemini chat agent that answers questions about the Phoenix traces (e.g. "Why did my last plan drop a destination?"). Every logged-in user can audit their own trips only; ownership is enforced server-side against the `trip_runs` table. Usernames listed in `ADMIN_USERNAMES` instead get the full Arize Phoenix MCP toolset (`npx @arizeai/phoenix-mcp`) with org-wide access — Node.js is required for this mode and is preinstalled in the Docker image. The auditor reads `PHOENIX_BASE_URL` (defaults to `http://localhost:6006`; Compose sets `http://phoenix:6006`) and reuses `PHOENIX_API_KEY` when Phoenix auth is enabled. See `docs/adr/ADR-013-trip-auditor-mcp.md`.
+
 ## Docker Compose Deployment
 
 The current deployment target is a single GCP Compute Engine VM running Docker Compose. The compose stack runs three services:
@@ -107,6 +113,7 @@ LLM_RETRY_BACKOFF_MAX_SECONDS=30
 RESEND_API_KEY=
 RESEND_FROM_EMAIL="Picnix <onboarding@resend.dev>"
 APP_BASE_URL=http://<VM_EXTERNAL_IP>:8501
+ADMIN_USERNAMES=<usernames allowed full Trip Auditor access>
 
 POSTGRES_DB=picnix
 POSTGRES_USER=picnix

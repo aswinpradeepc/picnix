@@ -43,6 +43,7 @@ services:
       ARIZE_PROJECT_NAME: picnix-vm
       OBSERVABILITY_CAPTURE_CONTENT: "true"
       PHOENIX_COLLECTOR_ENDPOINT: http://phoenix:6006/v1/traces
+      PHOENIX_BASE_URL: http://phoenix:6006
       PHOENIX_API_KEY: ${PHOENIX_API_KEY:-}
       RESEND_API_KEY: ${RESEND_API_KEY:-}
       RESEND_FROM_EMAIL: "${RESEND_FROM_EMAIL:-Picnix <onboarding@resend.dev>}"

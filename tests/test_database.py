@@ -412,6 +412,48 @@ def test_mark_trip_completed_does_not_double_count_existing_counted_thread() -> 
     assert calls[2][1][3:] == ("alice", "thread-1")
 
 
+def test_list_user_trip_threads_returns_all_statuses_for_normalized_user() -> None:
+    calls: list[tuple[str, tuple | None]] = []
+
+    class FakeCursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args) -> None:
+            return None
+
+        def execute(self, statement: str, params: tuple | None = None) -> None:
+            calls.append((statement, params))
+
+        def fetchall(self) -> list[dict]:
+            return [
+                {
+                    "thread_id": "thread-2",
+                    "title": "Beach day",
+                    "status": "running",
+                    "created_at": "2026-06-12T08:00:00Z",
+                    "completed_at": None,
+                },
+                {
+                    "thread_id": "thread-1",
+                    "title": "Hill trip",
+                    "status": "completed",
+                    "created_at": "2026-06-11T08:00:00Z",
+                    "completed_at": "2026-06-11T18:00:00Z",
+                },
+            ]
+
+    class FakeConnection:
+        def cursor(self) -> FakeCursor:
+            return FakeCursor()
+
+    threads = database.list_user_trip_threads(FakeConnection(), " Alice ", limit=10)
+
+    assert calls[0][1] == ("alice", 10)
+    assert [row["thread_id"] for row in threads] == ["thread-2", "thread-1"]
+    assert threads[0]["status"] == "running"
+
+
 def test_list_plan_history_returns_completed_counted_plans_newest_first() -> None:
     calls: list[tuple[str, tuple | None]] = []
 

@@ -1,6 +1,6 @@
 # Picnix Project Status
 
-Last updated: 2026-06-11 (BACKEND-PERSIST-5: Resend email verification + Gemini retry backoff)
+Last updated: 2026-06-12 (AUDITOR-1: Trip Auditor meta-agent with per-user trace scoping)
 
 ## Source Of Truth
 
@@ -41,6 +41,7 @@ Last updated: 2026-06-11 (BACKEND-PERSIST-5: Resend email verification + Gemini 
 - Phoenix-first observability bootstrap: `observability/bootstrap.py` calls `phoenix.otel.register(...)` and the OpenInference `LangChainInstrumentor` before graph imports in `app.py`. Controlled by `OBSERVABILITY_ENABLED=false`, `ARIZE_PRODUCT=phoenix`, and `OBSERVABILITY_CAPTURE_CONTENT=false` by default for local runs. The local Phoenix server is available through the optional `phoenix` extra. The deployment path is now a single GCP Compute Engine VM running Docker Compose with `app`, `phoenix`, and `db`; the app sends traces to `http://phoenix:6006/v1/traces`. Phoenix dashboard auth is enabled via `.env` and the app uses `PHOENIX_API_KEY` after a Phoenix system key is created. Manual node/tool spans and Arize AX are deferred. (OBS-1, DEPLOY-OBS, ADR-009, BACKEND-PERSIST-2)
 - Docker deployment artifacts: root `Dockerfile` builds the Streamlit app with `uv`; root `docker-compose.yml` runs `postgres:15`, `arizephoenix/phoenix:latest`, and the Picnix app, exposes ports 6006/4317/8501, persists Phoenix data in `phoenix-data`, persists database data in `postgres-data`, waits for Postgres health before app startup, mounts local ADC credentials into the app container, and passes Resend verification env vars into the app. (DEPLOY-OBS, BACKEND-PERSIST-2, BACKEND-PERSIST-5)
 - Database persistence module: `persistence/database.py` creates the psycopg connection pool from `DATABASE_URL`, provisions Picnix-owned `users` and `trip_runs` tables, migrates `users.is_verified` / `users.verification_token`, and runs LangGraph `PostgresSaver.setup()` before graph compilation. Existing users are marked verified when the verification columns are first introduced. (BACKEND-PERSIST-3, BACKEND-PERSIST-5)
+- Trip Auditor meta-agent: `pages/1_Trip_Auditor.py` is a standalone Streamlit page (never imports `graph/`) running a `gemini-3.1-pro-preview` tool-calling chat loop over Phoenix trace data. Admins (`ADMIN_USERNAMES` allowlist, deny-by-default) get the full Arize Phoenix MCP toolset via `npx @arizeai/phoenix-mcp` + `langchain-mcp-adapters` (Node.js 22 installed in the app image, package pre-installed for offline npx); all other logged-in users get two DB-validated Python tools — `list_my_trips` (trip_runs ownership via `persistence/database.py::list_user_trip_threads`) and `get_trip_spans` (Phoenix REST `GET /v1/projects/{project}/spans?attribute=session.id:<thread_id>`) — so the tool surface, not the prompt, is the per-user privacy boundary. Relies on OpenInference promoting the LangGraph `thread_id` to the `session.id` span attribute (verified empirically). New env: `PHOENIX_BASE_URL`, `ADMIN_USERNAMES`. (AUDITOR-1, ADR-013)
 - Streamlit authentication, email verification, and trial gatekeeper: unauthenticated users see only Login / Sign Up, registration stores bcrypt password hashes in Postgres, new accounts receive a Resend verification email with an `APP_BASE_URL/?verify=<UUID>` link, runtime graph actions are blocked until `users.is_verified = true`, runtime graph actions are also blocked when `users.trips_planned >= 5`, and completed plans are counted idempotently after N7 parks the graph at `n8_editor`. (BACKEND-PERSIST-4, BACKEND-PERSIST-5, ADR-011)
 
 ## Current Fixed Limits
@@ -63,6 +64,7 @@ Last updated: 2026-06-11 (BACKEND-PERSIST-5: Resend email verification + Gemini 
 - ADR-010: Backend authentication and production persistence — PostgreSQL 15 becomes the app persistence layer, `streamlit-authenticator` handles Streamlit registration/login, and LangGraph checkpointing moves from `MemorySaver` to a PostgreSQL-backed checkpointer.
 - ADR-011: Resend email verification for Streamlit accounts — new accounts are unverified until they use a one-time UUID verification link sent through Resend; existing accounts are grandfathered by the migration.
 - ADR-012: Gemini rate-limit retries with Tenacity — `get_chat_model()` returns a retrying `ChatGoogleGenerativeAI` subclass that retries transient quota/rate-limit failures with capped exponential backoff and jitter.
+- ADR-013: Trip Auditor — Phoenix MCP meta-agent with per-user trace scoping. Admin mode = full `@arizeai/phoenix-mcp` toolset; user mode = DB-validated tools over Phoenix REST filtered by `session.id`; tool surface is the privacy boundary.
 
 ## Deferred Discussions (Future Scope)
 
@@ -117,3 +119,4 @@ Future-scope items from `docs/design-context.md` remain out of scope unless expl
 - CS8: Region-agnostic — N6 prompt neutralised, known-place-issues.md cleared of Kerala entries, README generalised (2026-06-10). All CS0–CS8 complete.
 - BACKEND-PERSIST-5: Resend email verification — `users.is_verified` / `verification_token`, one-use `?verify=<UUID>` links, existing-user grandfathering, and graph execution blocked for unverified users (2026-06-11; commit `a2ac726`).
 - LLM-RETRY-1: Gemini retry backoff — central Tenacity retry wrapper in `tools/vertex.py` for transient `429 RESOURCE_EXHAUSTED` / quota failures (2026-06-11; commit `a2ac726`).
+- AUDITOR-1: Trip Auditor meta-agent — standalone `pages/1_Trip_Auditor.py` chat agent over Phoenix traces; admin full-MCP mode + per-user scoped mode with server-side ownership enforcement; Node.js 22 in the app image; ADR-013 (2026-06-12).
