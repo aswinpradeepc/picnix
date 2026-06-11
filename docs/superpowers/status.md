@@ -1,10 +1,10 @@
 # Picnix Project Status
 
-Last updated: 2026-06-11 (BACKEND-PERSIST-4: Streamlit auth and strict 5-trip trial gatekeeper)
+Last updated: 2026-06-11 (BACKEND-PERSIST-5: Resend email verification + Gemini retry backoff)
 
 ## Source Of Truth
 
-- `design-context.md` is the project Bible. Product behavior, graph contracts, API choices, and fixed planning limits should be reflected there first.
+- `docs/design-context.md` is the project Bible. Product behavior, graph contracts, API choices, and fixed planning limits should be reflected there first.
 - `pyproject.toml` is the dependency source of truth. Dependencies are added with `uv add <package>`, and `uv.lock` is committed.
 
 ## Planning Docs
@@ -34,13 +34,14 @@ Last updated: 2026-06-11 (BACKEND-PERSIST-4: Streamlit auth and strict 5-trip tr
 - Graph viz utility at `tools/graph_viz.py` exports `docs/graph.mmd` (and `docs/graph.png` if pygraphviz is installed) when `DEBUG=true`. (CS1)
 - N1 now emits `clarification_prompt: {question, input_type, options, allow_custom}` alongside each assistant message; `input_type` is one of `single_select`/`multi_select`/`text`. N1 asks exactly one question per round (no chained prose). Streamlit renders checkboxes (multi-select), radio (single-select), or a text box (text) accordingly, and always offers a free-text box so the user can combine a choice with extra context — both are merged into one labeled answer. Options sourced from `INTEREST_TYPE_MAP` keys in N2. (CS3 + UX fix)
 - Reasoning slots — N1, N4 (dwell time call), N5 (semantic validation pass), and N8 (plan editor) — run `gemini-3.1-pro-preview` (`REASONING_GEMINI_MODEL`) with `temperature=1.0`; N6 remains on `gemini-2.5-flash`. Requires `GOOGLE_CLOUD_LOCATION=global` (3.1 Pro is global-endpoint only; 3 Pro preview was discontinued 2026-03).
+- Gemini calls created by `tools/vertex.py` use a central `RetryingChatGoogleGenerativeAI` wrapper with Tenacity capped exponential backoff + jitter for transient quota/rate-limit failures such as `429 RESOURCE_EXHAUSTED`. Retry knobs: `LLM_RETRY_ATTEMPTS`, `LLM_RETRY_BACKOFF_MIN_SECONDS`, and `LLM_RETRY_BACKOFF_MAX_SECONDS`. (ADR-012)
 - Google Maps deep-link export: `tools/gmaps.py` `generate_gmaps_link(timeline)` builds a round-trip URL (origin=start, destination=start, waypoints=all destination stops); rendered as `st.link_button("Open in Google Maps 🗺️")` after the final itinerary. (CS6)
 - N6 itinerary format updated to hybrid: one bold section header per stop + one punchy vibe sentence + 1–2 bullet points for must-know facts. (CS7)
 - Region-agnostic: N6 system prompt removes "Kerala local" identity and Malayalam warmth phrases; replaced with a locally neutral tone instruction. `docs/known-place-issues.md` cleared of Kerala-specific entries and given a region-agnostic header. `README.md` updated to remove Kerala reference. (CS8)
 - Phoenix-first observability bootstrap: `observability/bootstrap.py` calls `phoenix.otel.register(...)` and the OpenInference `LangChainInstrumentor` before graph imports in `app.py`. Controlled by `OBSERVABILITY_ENABLED=false`, `ARIZE_PRODUCT=phoenix`, and `OBSERVABILITY_CAPTURE_CONTENT=false` by default for local runs. The local Phoenix server is available through the optional `phoenix` extra. The deployment path is now a single GCP Compute Engine VM running Docker Compose with `app`, `phoenix`, and `db`; the app sends traces to `http://phoenix:6006/v1/traces`. Phoenix dashboard auth is enabled via `.env` and the app uses `PHOENIX_API_KEY` after a Phoenix system key is created. Manual node/tool spans and Arize AX are deferred. (OBS-1, DEPLOY-OBS, ADR-009, BACKEND-PERSIST-2)
-- Docker deployment artifacts: root `Dockerfile` builds the Streamlit app with `uv`; root `docker-compose.yml` runs `postgres:15`, `arizephoenix/phoenix:latest`, and the Picnix app, exposes ports 6006/4317/8501, persists Phoenix data in `phoenix-data`, persists database data in `postgres-data`, waits for Postgres health before app startup, and mounts local ADC credentials into the app container. (DEPLOY-OBS, BACKEND-PERSIST-2)
-- Database persistence module: `persistence/database.py` creates the psycopg connection pool from `DATABASE_URL`, provisions Picnix-owned `users` and `trip_runs` tables, and runs LangGraph `PostgresSaver.setup()` before graph compilation. (BACKEND-PERSIST-3)
-- Streamlit authentication and trial gatekeeper: unauthenticated users see only Login / Sign Up, registration stores bcrypt password hashes in Postgres, runtime graph actions are blocked when `users.trips_planned >= 5`, and completed plans are counted idempotently after N7 parks the graph at `n8_editor`. (BACKEND-PERSIST-4)
+- Docker deployment artifacts: root `Dockerfile` builds the Streamlit app with `uv`; root `docker-compose.yml` runs `postgres:15`, `arizephoenix/phoenix:latest`, and the Picnix app, exposes ports 6006/4317/8501, persists Phoenix data in `phoenix-data`, persists database data in `postgres-data`, waits for Postgres health before app startup, mounts local ADC credentials into the app container, and passes Resend verification env vars into the app. (DEPLOY-OBS, BACKEND-PERSIST-2, BACKEND-PERSIST-5)
+- Database persistence module: `persistence/database.py` creates the psycopg connection pool from `DATABASE_URL`, provisions Picnix-owned `users` and `trip_runs` tables, migrates `users.is_verified` / `users.verification_token`, and runs LangGraph `PostgresSaver.setup()` before graph compilation. Existing users are marked verified when the verification columns are first introduced. (BACKEND-PERSIST-3, BACKEND-PERSIST-5)
+- Streamlit authentication, email verification, and trial gatekeeper: unauthenticated users see only Login / Sign Up, registration stores bcrypt password hashes in Postgres, new accounts receive a Resend verification email with an `APP_BASE_URL/?verify=<UUID>` link, runtime graph actions are blocked until `users.is_verified = true`, runtime graph actions are also blocked when `users.trips_planned >= 5`, and completed plans are counted idempotently after N7 parks the graph at `n8_editor`. (BACKEND-PERSIST-4, BACKEND-PERSIST-5, ADR-011)
 
 ## Current Fixed Limits
 
@@ -60,6 +61,8 @@ Last updated: 2026-06-11 (BACKEND-PERSIST-4: Streamlit auth and strict 5-trip tr
 - ADR-008: N8 plan editor (CS5) — park-at-N8 interrupt model vs. conditional N7→END, closed-universe edits with FS-3 deferral, IDs-only LLM contract, app-side auto-resume rule for the N4 interrupt.
 - ADR-009: Phoenix-first observability — Phoenix is the active milestone target via OpenInference LangChain auto-instrumentation; deployment is self-hosted Phoenix + app on one Compute Engine VM via Docker Compose; Arize AX and manual spans are deferred.
 - ADR-010: Backend authentication and production persistence — PostgreSQL 15 becomes the app persistence layer, `streamlit-authenticator` handles Streamlit registration/login, and LangGraph checkpointing moves from `MemorySaver` to a PostgreSQL-backed checkpointer.
+- ADR-011: Resend email verification for Streamlit accounts — new accounts are unverified until they use a one-time UUID verification link sent through Resend; existing accounts are grandfathered by the migration.
+- ADR-012: Gemini rate-limit retries with Tenacity — `get_chat_model()` returns a retrying `ChatGoogleGenerativeAI` subclass that retries transient quota/rate-limit failures with capped exponential backoff and jitter.
 
 ## Deferred Discussions (Future Scope)
 
@@ -75,12 +78,12 @@ N1–N7 graph nodes and Streamlit demo are complete. Remaining change sets are f
 
 - **CS3 ✓ done (+ UX fix)** — N1 emits a typed `clarification_prompt` dict; Streamlit renders the matching control (checkbox/radio/text) and merges a selected choice with optional free-text into one answer. The earlier known issue (free-form fields returned empty `options` and hid the input) is resolved: `text` input_type now renders a dedicated text box instead of being dropped.
 - **CS4 ✓ done** — Multi-destination selection (1–3 stops). `selected_destinations` (+ `max_destinations`, `presented_candidate_indices`, `removal_notice`) replaces `validated_destination`/`presented_candidate_index`. `gmaps.compute_route` gained `intermediates` → one `computeRoutes` call with waypoints + per-leg `normalized_legs`. N4 chains stops into one route/timeline with per-segment food; N5 drops the unplannable stop and re-plans the rest; N7 labels "Stop N". Streamlit shows a scrollable multi-select card gallery.
-- **CS5 ✓ done** — N8 plan editor (cs5.md v2 spec): park-at-N8 interrupt, closed-universe IDs-only edits, app-side auto-resume of the N4 interrupt; FS-3 (edit-time place additions + user-directed food stops) deferred. Recorded in ADR-008.
+- **CS5 done** — N8 plan editor (`docs/cs5.md` v2 spec): park-at-N8 interrupt, closed-universe IDs-only edits, app-side auto-resume of the N4 interrupt; FS-3 (edit-time place additions + user-directed food stops) deferred. Recorded in ADR-008.
 - **CS6 ✓ done** — Google Maps deep-link export after N7.
 - **CS7 ✓ done** — Hybrid itinerary format in N6 (bold header + vibe sentence + bullets).
 - **CS8 ✓ done** — Region-agnostic: Kerala/India-specific strings removed from code, prompts, and docs.
 
-All next_milestone.md change sets (CS0–CS8) are complete. The AI layer MVP is shipped.
+All `docs/next_milestone.md` change sets (CS0-CS8) are complete. The AI layer MVP is shipped.
 
 ## Active Next Milestone
 
@@ -89,12 +92,14 @@ Backend, user management, and production persistence are now promoted into activ
 - Docker Compose now runs `app + phoenix + db`, where `db` is PostgreSQL 15 with a persistent `postgres-data` volume.
 - App configuration reads `DATABASE_URL`, defaulting to `postgresql://picnix:picnix@localhost:5432/picnix`.
 - `streamlit-authenticator`, `langgraph-checkpoint-postgres`, `psycopg`, and `psycopg-pool` are installed.
+- `resend` and `tenacity` are installed for email verification and Gemini retry backoff.
 - Runtime graph checkpointing now uses LangGraph `PostgresSaver` backed by a psycopg connection pool.
 - Database startup now provisions Picnix-owned `users` and `trip_runs` tables plus LangGraph checkpoint tables.
 - Streamlit has authenticated registration/login through `streamlit-authenticator`.
+- New account registration sends Resend email verification links and blocks graph execution until `users.is_verified = true`.
 - Trial enforcement blocks graph execution once `users.trips_planned >= 5` and increments only after N7 successfully completes for a graph thread.
 
-Future-scope items from `design-context.md` remain out of scope unless explicitly promoted: FastAPI, production frontend, multi-day planning, Arize AX, and manual observability spans. Auth and persistence are now promoted into active scope by ADR-010.
+Future-scope items from `docs/design-context.md` remain out of scope unless explicitly promoted: FastAPI, production frontend, multi-day planning, Arize AX, and manual observability spans. Auth and persistence are now promoted into active scope by ADR-010.
 
 ## Latest Checkpoint
 
@@ -110,3 +115,5 @@ Future-scope items from `design-context.md` remain out of scope unless explicitl
 - CS6: Google Maps deep-link export — `generate_gmaps_link` in gmaps.py, `st.link_button` in app.py (2026-06-10).
 - CS7: Hybrid itinerary format — bold header + vibe sentence + bullets per stop in N6 (2026-06-10).
 - CS8: Region-agnostic — N6 prompt neutralised, known-place-issues.md cleared of Kerala entries, README generalised (2026-06-10). All CS0–CS8 complete.
+- BACKEND-PERSIST-5: Resend email verification — `users.is_verified` / `verification_token`, one-use `?verify=<UUID>` links, existing-user grandfathering, and graph execution blocked for unverified users (2026-06-11; commit `a2ac726`).
+- LLM-RETRY-1: Gemini retry backoff — central Tenacity retry wrapper in `tools/vertex.py` for transient `429 RESOURCE_EXHAUSTED` / quota failures (2026-06-11; commit `a2ac726`).

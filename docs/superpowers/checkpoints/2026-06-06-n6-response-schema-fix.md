@@ -27,7 +27,7 @@ the response.
   `itinerary_draft`, `final_itinerary`, `text`, `content`, and sectioned itinerary
   objects.
 - Added regression tests for alias and sectioned itinerary responses.
-- Updated `design-context.md` to record that N6 must use both JSON MIME mode and a
+- Updated `docs/design-context.md` to record that N6 must use both JSON MIME mode and a
   matching response schema.
 
 ## Verified

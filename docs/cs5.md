@@ -1,6 +1,6 @@
 # Change Set 5 (v2) — N8 Plan Editor
 
-Read this file fully before touching any code. This replaces the original CS5 section in `next_milestone.md`. If any implemented CS5 code exists from a previous attempt, **revert it first** and start from this spec — do not patch the old attempt.
+Read this file fully before touching any code. This replaces the original CS5 section in `docs/next_milestone.md`. If any implemented CS5 code exists from a previous attempt, **revert it first** and start from this spec — do not patch the old attempt.
 
 ---
 

@@ -8,7 +8,7 @@ This file is the shared reference for every agent (Claude Code, Codex, Antigravi
 
 - **Name:** Picnix
 - **Purpose:** Conversational AI trip planner. Takes user constraints via chat, builds a time-accurate itinerary, renders it on a Mapbox map.
-- **Status:** Active development. Moving from local MVP to authenticated, persistent Docker Compose deployment. No billing or production web frontend yet.
+- **Status:** Active development. Moving from local MVP to authenticated, email-verified, persistent Docker Compose deployment. No billing or production web frontend yet.
 
 ---
 
@@ -29,8 +29,9 @@ This file is the shared reference for every agent (Claude Code, Codex, Antigravi
 | Persistence | PostgreSQL 15 via Docker Compose `db` service; app config reads `DATABASE_URL` |
 | Graph checkpointing | LangGraph PostgreSQL checkpointer (`PostgresSaver` or connection-pool-backed equivalent) |
 | Authentication | `streamlit-authenticator` in the Streamlit frontend, backed by the PostgreSQL `users` table |
+| Email delivery | Resend API via the `resend` Python SDK for account verification emails |
 
-**No other external planning/geo services.** No Overpass, no ORS, no OSRM, no OpenStreetMap API calls. Google Maps handles all geo data. Mapbox handles all rendering. Phoenix is allowed only for observability under ADR-009.
+**No other external planning/geo services.** No Overpass, no ORS, no OSRM, no OpenStreetMap API calls. Google Maps handles all geo data. Mapbox handles all rendering. Phoenix is allowed only for observability under ADR-009, and Resend is allowed only for account verification email under ADR-011.
 
 ### Environment Variables
 
@@ -38,8 +39,11 @@ This file is the shared reference for every agent (Claude Code, Codex, Antigravi
 GOOGLE_MAPS_API_KEY=
 MAPBOX_TOKEN=
 GOOGLE_CLOUD_PROJECT=        # your GCP project ID
-GOOGLE_CLOUD_LOCATION=       # Vertex AI region, e.g. us-central1
+GOOGLE_CLOUD_LOCATION=       # use global for gemini-3.1-pro-preview
 GOOGLE_APPLICATION_CREDENTIALS=  # optional; leave blank/unset for local ADC OAuth
+LLM_RETRY_ATTEMPTS=5
+LLM_RETRY_BACKOFF_MIN_SECONDS=1
+LLM_RETRY_BACKOFF_MAX_SECONDS=30
 OBSERVABILITY_ENABLED=false  # optional Phoenix tracing
 ARIZE_PRODUCT=phoenix
 ARIZE_PROJECT_NAME=picnix-local
@@ -50,6 +54,9 @@ DATABASE_URL=                # optional; defaults to local Postgres fallback in 
 AUTH_COOKIE_NAME=picnix_auth
 AUTH_COOKIE_KEY=             # generate a strong random value for deployment
 AUTH_COOKIE_EXPIRY_DAYS=30
+RESEND_API_KEY=
+RESEND_FROM_EMAIL="Picnix <onboarding@resend.dev>"
+APP_BASE_URL=http://localhost:8501
 ```
 
 ### Required Google Cloud APIs
@@ -76,6 +83,7 @@ Use `uv` for dependency management. `pyproject.toml` is the single source of tru
 - Phoenix observability through global OpenInference LangChain instrumentation
 - Docker Compose deployment: Picnix app + self-hosted Phoenix + PostgreSQL
 - Streamlit authentication, persisted user accounts, and a strict 5 completed-trip trial limit per account
+- Resend email verification for new accounts before graph execution is enabled
 - PostgreSQL-backed LangGraph checkpoint persistence
 
 ---
@@ -102,6 +110,8 @@ tools/gmaps.py              — All Google Maps HTTP calls. No business logic he
 tools/mapbox.py             — Mapbox token helpers only.
 config/settings.py          — All env var loading. No hardcoded strings elsewhere.
 persistence/database.py      — PostgreSQL connection pooling, schema setup, user/trial helpers, LangGraph checkpointer factory.
+email_utils.py               — Resend verification email helper. No other module should call Resend directly.
+persistence/migrations/      — Idempotent Picnix-owned SQL migrations documented for production operations.
 observability/bootstrap.py   — Phoenix/OpenInference setup. Called before graph imports; no manual spans in current scope.
 docs/known-place-issues.md  — Durable place-level exceptions. Update here, not in node code.
 agents.md                   — This file. Update when scope, stack, or ownership changes.
@@ -117,6 +127,7 @@ Runtime containers:
 Browser → Streamlit app → LangGraph N1-N8
                      ↘ PostgreSQL db (users, trial counters, LangGraph checkpoints)
                      ↘ Phoenix (OpenInference traces)
+                     ↘ Resend API (account verification email)
 ```
 
 ```
@@ -147,6 +158,8 @@ Node responsibilities at a glance:
 - No hardcoded strings outside of `config/settings.py` and the interest→type map in N2.
 - The LangGraph graph must be compiled with a PostgreSQL-backed checkpointer in production so human interrupts and N8 parked threads survive restarts.
 - Use `python-dotenv` and never reference `os.environ` directly — always go through `config/settings.py`.
+- All Gemini model construction must go through `tools/vertex.py::get_chat_model()` so Tenacity retry policy is applied consistently.
+- All account verification email sends must go through `email_utils.py`; do not call the Resend SDK directly from Streamlit forms or database helpers.
 
 ---
 
@@ -173,3 +186,5 @@ Node responsibilities at a glance:
 | 2026-06-11 | BACKEND-PERSIST-2 | Phase 2 dependency and infrastructure setup. Added streamlit-authenticator, psycopg/psycopg-pool, langgraph-checkpoint-postgres, DATABASE_URL config, and a health-checked PostgreSQL db service with postgres-data volume. |
 | 2026-06-11 | BACKEND-PERSIST-3 | Phase 3 database initialization and graph persistence. Added persistence/database.py schema setup for users/trip_runs, LangGraph PostgresSaver setup, and build_graph checkpointer injection with Postgres as the runtime default. |
 | 2026-06-11 | BACKEND-PERSIST-4 | Phase 4 auth and trial gatekeeper. Streamlit login/sign-up uses streamlit-authenticator, users persist in Postgres with hashed passwords, graph execution is blocked at 5 completed trips, and N7 completion increments are idempotent per thread. |
+| 2026-06-11 | BACKEND-PERSIST-5 | Resend email verification. Users table gains is_verified/verification_token, existing users are grandfathered as verified, new users get one-use UUID verification links through Resend, and graph execution is blocked until email verification passes. |
+| 2026-06-11 | LLM-RETRY-1 | Gemini retry backoff. tools/vertex.py returns a retrying ChatGoogleGenerativeAI subclass with Tenacity capped exponential backoff + jitter for transient 429/RESOURCE_EXHAUSTED quota failures. |

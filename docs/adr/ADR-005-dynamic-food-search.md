@@ -23,5 +23,5 @@ Implemented in `n4_route.py` via `_point_on_polyline()` and `_route_point_for_me
 
 - `_decode_polyline()` in `n4_route.py` handles the encoded polyline format returned by Routes API. If the polyline is absent (API error), it falls back to a straight-line interpolation between start and destination.
 - Food guidance can be one of five statuses: `eat_at_destination`, `destination_options`, `route_options`, `eat_at_home`, `carry_or_parcel`. This avoids forcing a restaurant stop when one is not needed.
-- The design explicitly prohibits static route towns, hubs, cities, or checkpoints in N4. This rule is enforced in `design-context.md` and `docs/superpowers/status.md` as a fixed limit.
+- The design explicitly prohibits static route towns, hubs, cities, or checkpoints in N4. This rule is enforced in `docs/design-context.md` and `docs/superpowers/status.md` as a fixed limit.
 - If `search_food_spots_near_location` returns no results (remote area, early hours), the fallback is `carry_or_parcel` guidance — honest about the gap rather than inventing a restaurant.

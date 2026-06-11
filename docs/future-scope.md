@@ -2,7 +2,7 @@
 
 These are **deferred** design discussions captured during CS4 (multi-destination selection). They are not yet scheduled into a change set. Each item records the current behavior, the options considered, and the open questions, so the decision can be picked up cleanly in a later phase.
 
-Format mirrors `next_milestone.md`. When an item is promoted to a real change set, move the agreed approach into `next_milestone.md`, implement it, and update the relevant ADR.
+Format mirrors `docs/next_milestone.md`. When an item is promoted to a real change set, move the agreed approach into `docs/next_milestone.md`, implement it, and update the relevant ADR.
 
 Status legend: **Deferred** = agreed to revisit later; **Open** = no decision yet.
 
@@ -92,7 +92,7 @@ Status legend: **Deferred** = agreed to revisit later; **Open** = no decision ye
 
 ## Notes
 
-- These items were raised in the session that implemented CS4 (2026-06-09). They are intentionally **not** in `next_milestone.md` yet to avoid implying they are scheduled.
+- These items were raised in the session that implemented CS4 (2026-06-09). They are intentionally **not** in `docs/next_milestone.md` yet to avoid implying they are scheduled.
 - The current CS4 decisions they supersede are recorded as **Accepted (current)** in `docs/adr/ADR-007-multi-destination-routing.md`, with these future revisits noted.
 
 ---

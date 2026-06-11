@@ -1,5 +1,7 @@
 # Picnix — next milestone Work Instructions
 
+> Historical note: this file records the completed CS0-CS8 AI-layer milestone and is no longer the current planning source. Current project status, active backend/auth scope, ADR links, and completion notes live in `docs/superpowers/status.md`, `agents.md`, and `docs/design-context.md`.
+
 Read this file fully before touching any code. These are **sequential change sets**. Do not jump ahead. Complete each section, verify it works, then move to the next.
 
 ---
@@ -216,11 +218,11 @@ This is the largest change. Read the full spec before starting.
 
 ---
 
-## Change Set 5 — Plan rework (N8 Plan Editor) — ✓ done, superseded by cs5.md v2
+## Change Set 5 — Plan rework (N8 Plan Editor) — done, superseded by `docs/cs5.md` v2
 
 The original CS5 section that lived here had four ambiguities (conditional N7→N8, a
 second "confirm the edit" interrupt, an undefined "request new validation" mechanism,
-and no output contract for the N8 LLM call) and was replaced by the **`cs5.md` (v2)**
+and no output contract for the N8 LLM call) and was replaced by the **`docs/cs5.md` (v2)**
 spec, which is the authoritative record of what was built: unconditional N7→N8 with a
 park-at-`n8_editor` interrupt, closed-universe IDs-only edits, and an app-side
 auto-resume rule for the N4 interrupt. Implemented 2026-06-10 on branch

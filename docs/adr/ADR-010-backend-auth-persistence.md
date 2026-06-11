@@ -29,6 +29,8 @@ CREATE TABLE IF NOT EXISTS users (
     username TEXT NOT NULL UNIQUE,
     email TEXT NOT NULL UNIQUE,
     password_hash TEXT NOT NULL,
+    is_verified BOOLEAN NOT NULL DEFAULT FALSE,
+    verification_token UUID,
     trips_planned INTEGER NOT NULL DEFAULT 0
         CHECK (trips_planned >= 0 AND trips_planned <= 5),
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
@@ -51,11 +53,11 @@ CREATE TABLE IF NOT EXISTS trip_runs (
 );
 ```
 
-`users` is the account source of truth. `trip_runs` exists because Streamlit reruns and browser refreshes can revisit the same completed graph thread. Counting must be tied to a unique graph `thread_id`, not to a UI render.
+`users` is the account source of truth. `is_verified` and `verification_token` were added by ADR-011 after this persistence decision so graph execution can require verified email. `trip_runs` exists because Streamlit reruns and browser refreshes can revisit the same completed graph thread. Counting must be tied to a unique graph `thread_id`, not to a UI render.
 
 ## Trial Gatekeeper
 
-Before starting or resuming graph execution for trip planning, the authenticated username is checked in PostgreSQL. If `users.trips_planned >= 5`, graph execution is blocked and Streamlit renders a clean "Limit Reached" UI.
+Before starting or resuming graph execution for trip planning, the authenticated username is checked in PostgreSQL. If `users.is_verified = FALSE`, graph execution is blocked until the user verifies email through the ADR-011 Resend flow. If `users.trips_planned >= 5`, graph execution is blocked and Streamlit renders a clean "Limit Reached" UI.
 
 The counter increments only when the graph successfully completes N7 and parks at the `n8_editor` interrupt. The post-execution update must run in one database transaction:
 

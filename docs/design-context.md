@@ -24,7 +24,9 @@ The current milestone keeps the Streamlit app and LangGraph graph, and promotes 
 - PostgreSQL 15 in Docker Compose as the `db` service
 - `streamlit-authenticator` for Streamlit registration/login
 - PostgreSQL-backed LangGraph checkpointing
+- Resend email verification before graph execution is enabled for new accounts
 - strict 5 completed-trip trial limit per account
+- central Gemini retry backoff for transient quota/rate-limit failures
 
 Do NOT build any of the following right now. Leave clean interfaces for them to be added later:
 - FastAPI endpoints
@@ -39,7 +41,7 @@ Do NOT build any of the following right now. Leave clean interfaces for them to 
 | Concern | Tool |
 |---|---|
 | AI graph | LangGraph (Python) |
-| LLM | Google Vertex AI — use `gemini-2.5-flash` via `langchain-google-genai` (`ChatGoogleGenerativeAI`) |
+| LLM | Google Vertex AI via `langchain-google-genai` (`ChatGoogleGenerativeAI`) — `gemini-3.1-pro-preview` for reasoning slots and `gemini-2.5-flash` for N6 prose; `tools/vertex.py` applies Tenacity retry backoff for transient quota/rate-limit failures |
 | Map rendering | Mapbox GL JS, via `pydeck` in Streamlit |
 | Place search & data | Google Maps Places API (New) |
 | Routing & distance | Google Maps Routes API |
@@ -49,8 +51,9 @@ Do NOT build any of the following right now. Leave clean interfaces for them to 
 | Package management | `uv`, with `pyproject.toml` and `uv.lock` |
 | Persistence | PostgreSQL 15 |
 | Authentication | `streamlit-authenticator` |
+| Email delivery | Resend API via the `resend` Python SDK |
 
-**No other external services.** No Overpass, no ORS, no OSRM, no OpenStreetMap API calls. Google Maps handles all geo data. Mapbox handles all rendering.
+**No other planning or geo services.** No Overpass, no ORS, no OSRM, no OpenStreetMap API calls. Google Maps handles all geo data. Mapbox handles rendering, Phoenix handles observability, PostgreSQL handles persistence, and Resend handles account verification email.
 
 ### Package management
 
@@ -61,8 +64,18 @@ Use `uv` for dependency management. `pyproject.toml` is the single source of tru
 GOOGLE_MAPS_API_KEY=
 MAPBOX_TOKEN=
 GOOGLE_CLOUD_PROJECT=        # your GCP project ID
-GOOGLE_CLOUD_LOCATION=       # use asia-south1 for India/Mumbai Vertex AI
+GOOGLE_CLOUD_LOCATION=       # use global for gemini-3.1-pro-preview
 GOOGLE_APPLICATION_CREDENTIALS=  # optional; leave blank/unset for local ADC OAuth
+LLM_RETRY_ATTEMPTS=5
+LLM_RETRY_BACKOFF_MIN_SECONDS=1
+LLM_RETRY_BACKOFF_MAX_SECONDS=30
+DATABASE_URL=
+AUTH_COOKIE_NAME=picnix_auth
+AUTH_COOKIE_KEY=
+AUTH_COOKIE_EXPIRY_DAYS=30
+RESEND_API_KEY=
+RESEND_FROM_EMAIL="Picnix <onboarding@resend.dev>"
+APP_BASE_URL=http://localhost:8501
 ```
 
 For local development, authenticate Vertex AI with Application Default Credentials:
@@ -83,7 +96,7 @@ Enable these APIs in the same GCP project used by `.env`.
 | Places API (New) | `places.googleapis.com` | `tools/gmaps.py`, N2, N3, N4 | Destination search, place details, opening hours/access validation, food stop search |
 | Geocoding API | `geocoding-backend.googleapis.com` | `tools/gmaps.py`, N2 | Convert user start-location text into latitude/longitude |
 | Routes API | `routes.googleapis.com` | `tools/gmaps.py`, N3, N4 | Actual travel-time validation, round-trip route geometry, legs, ETAs |
-| Vertex AI API | `aiplatform.googleapis.com` | `tools/vertex.py`, N1, N5, N6 | Gemini 2.5 Flash calls through `ChatGoogleGenerativeAI` using the Vertex AI backend |
+| Vertex AI API | `aiplatform.googleapis.com` | `tools/vertex.py`, N1, N4, N5, N6, N8 | Gemini calls through `ChatGoogleGenerativeAI` using the Vertex AI backend |
 
 Do not enable or use Maps JavaScript API, legacy Directions API, Distance Matrix API, Geolocation API, Time Zone API, Roads API, Overpass, ORS, OSRM, or OpenStreetMap API for this build.
 
@@ -103,7 +116,8 @@ Keep external-service calls behind small functions so graph nodes do orchestrati
 | `validate_place_open_for_window()` | `tools/gmaps.py` | N3, N4 | Pure Python validation over Places opening-hours data |
 | `maps_request()` | `tools/gmaps.py` | N2, N3, N4 | Shared Google Maps HTTP request/error handling |
 | `get_mapbox_token()` / `require_mapbox_token()` | `tools/mapbox.py` | Streamlit UI | Local config helper for Mapbox rendering |
-| `get_chat_model()` | `tools/vertex.py` | N1, N5, N6 | Vertex AI Gemini via `ChatGoogleGenerativeAI`, authenticated by ADC by default |
+| `get_chat_model()` | `tools/vertex.py` | N1, N4, N5, N6, N8 | Vertex AI Gemini via `ChatGoogleGenerativeAI`, authenticated by ADC by default, with Tenacity retry backoff |
+| `send_verification_email()` | `email_utils.py` | Streamlit registration | Resend account verification email |
 
 ---
 

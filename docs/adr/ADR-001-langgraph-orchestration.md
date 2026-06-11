@@ -15,7 +15,7 @@ Use LangGraph `StateGraph` with a `MemorySaver` checkpointer. All nodes read fro
 
 - **Raw Python + `st.session_state`**: Feasible for a linear flow, but handling the interrupt/resume pattern and conditional edges manually adds significant boilerplate and the retry loop in N3 requires explicit state threading.
 - **Temporal / Prefect**: General-purpose workflow engines, not designed for LLM orchestration. Heavier operational footprint; no built-in LLM tool-call abstractions.
-- **LangGraph**: Designed for stateful LLM workflows. Built-in `interrupt_before`, MemorySaver checkpointing, conditional edges, LangChain message type integration. Matches the node-by-node architecture in `design-context.md` directly.
+- **LangGraph**: Designed for stateful LLM workflows. Built-in `interrupt_before`, MemorySaver checkpointing, conditional edges, LangChain message type integration. Matches the node-by-node architecture in `docs/design-context.md` directly.
 
 ## Consequences
 
