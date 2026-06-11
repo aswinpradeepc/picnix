@@ -44,6 +44,9 @@ services:
       OBSERVABILITY_CAPTURE_CONTENT: "true"
       PHOENIX_COLLECTOR_ENDPOINT: http://phoenix:6006/v1/traces
       PHOENIX_API_KEY: ${PHOENIX_API_KEY:-}
+      RESEND_API_KEY: ${RESEND_API_KEY:-}
+      RESEND_FROM_EMAIL: "${RESEND_FROM_EMAIL:-Picnix <onboarding@resend.dev>}"
+      APP_BASE_URL: "${APP_BASE_URL:-http://localhost:8501}"
       DATABASE_URL: postgresql://${POSTGRES_USER:-picnix}:${POSTGRES_PASSWORD:-picnix}@db:5432/${POSTGRES_DB:-picnix}
       LANGGRAPH_STRICT_MSGPACK: "true"
       # Tell the app where the credentials live inside the container

@@ -14,6 +14,9 @@ def make_settings(
     google_cloud_project: str = "picnix-project",
     google_cloud_location: str = "asia-south1",
     google_application_credentials: str = "",
+    llm_retry_attempts: int = 5,
+    llm_retry_backoff_min_seconds: float = 1.0,
+    llm_retry_backoff_max_seconds: float = 30.0,
 ) -> Settings:
     return Settings(
         google_maps_api_key=google_maps_api_key,
@@ -21,6 +24,9 @@ def make_settings(
         google_cloud_project=google_cloud_project,
         google_cloud_location=google_cloud_location,
         google_application_credentials=google_application_credentials,
+        llm_retry_attempts=llm_retry_attempts,
+        llm_retry_backoff_min_seconds=llm_retry_backoff_min_seconds,
+        llm_retry_backoff_max_seconds=llm_retry_backoff_max_seconds,
     )
 
 
@@ -61,6 +67,104 @@ def test_vertex_model_uses_google_genai_with_vertex_backend() -> None:
     assert model.location == "asia-south1"
     assert model.vertexai is True
     assert model.temperature == 0
+    assert model.llm_retry_attempts == 5
+    assert model.llm_retry_backoff_min_seconds == 1.0
+    assert model.llm_retry_backoff_max_seconds == 30.0
+
+
+def test_vertex_model_retries_retryable_gemini_errors(monkeypatch) -> None:
+    from langchain_google_genai import ChatGoogleGenerativeAI
+
+    from tools.vertex import get_chat_model
+
+    class ResourceExhausted(Exception):
+        pass
+
+    calls: list[str] = []
+
+    def fake_invoke(self, input, config=None, **kwargs):
+        calls.append(input)
+        if len(calls) < 3:
+            raise ResourceExhausted("429 RESOURCE_EXHAUSTED")
+        return type("FakeMessage", (), {"content": "ok"})()
+
+    monkeypatch.setattr(ChatGoogleGenerativeAI, "invoke", fake_invoke)
+
+    model = get_chat_model(
+        settings=make_settings(
+            llm_retry_attempts=3,
+            llm_retry_backoff_min_seconds=0,
+            llm_retry_backoff_max_seconds=0,
+        ),
+        temperature=0,
+    )
+
+    response = model.invoke("hello")
+
+    assert response.content == "ok"
+    assert calls == ["hello", "hello", "hello"]
+
+
+def test_vertex_model_reraises_after_retry_cap(monkeypatch) -> None:
+    from langchain_google_genai import ChatGoogleGenerativeAI
+
+    from tools.vertex import get_chat_model
+
+    class ResourceExhausted(Exception):
+        pass
+
+    calls: list[str] = []
+
+    def fake_invoke(self, input, config=None, **kwargs):
+        calls.append(input)
+        raise ResourceExhausted("429 RESOURCE_EXHAUSTED")
+
+    monkeypatch.setattr(ChatGoogleGenerativeAI, "invoke", fake_invoke)
+
+    model = get_chat_model(
+        settings=make_settings(
+            llm_retry_attempts=2,
+            llm_retry_backoff_min_seconds=0,
+            llm_retry_backoff_max_seconds=0,
+        ),
+        temperature=0,
+    )
+
+    with pytest.raises(ResourceExhausted):
+        model.invoke("hello")
+
+    assert calls == ["hello", "hello"]
+
+
+def test_vertex_model_does_not_retry_non_retryable_errors(monkeypatch) -> None:
+    from langchain_google_genai import ChatGoogleGenerativeAI
+
+    from tools.vertex import get_chat_model
+
+    class PermanentFailure(Exception):
+        pass
+
+    calls: list[str] = []
+
+    def fake_invoke(self, input, config=None, **kwargs):
+        calls.append(input)
+        raise PermanentFailure("schema rejected")
+
+    monkeypatch.setattr(ChatGoogleGenerativeAI, "invoke", fake_invoke)
+
+    model = get_chat_model(
+        settings=make_settings(
+            llm_retry_attempts=5,
+            llm_retry_backoff_min_seconds=0,
+            llm_retry_backoff_max_seconds=0,
+        ),
+        temperature=0,
+    )
+
+    with pytest.raises(PermanentFailure):
+        model.invoke("hello")
+
+    assert calls == ["hello"]
 
 
 def test_geocode_location_normalizes_google_response(monkeypatch) -> None:

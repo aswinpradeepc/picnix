@@ -4,6 +4,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any
+from uuid import UUID
 
 from langgraph.checkpoint.postgres import PostgresSaver
 from psycopg.rows import dict_row
@@ -23,12 +24,51 @@ CREATE TABLE IF NOT EXISTS users (
     username TEXT NOT NULL UNIQUE,
     email TEXT NOT NULL UNIQUE,
     password_hash TEXT NOT NULL,
+    is_verified BOOLEAN NOT NULL DEFAULT FALSE,
+    verification_token UUID,
     trips_planned INTEGER NOT NULL DEFAULT 0
         CHECK (trips_planned >= 0 AND trips_planned <= 5),
     created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     last_login_at TIMESTAMPTZ
 );
+"""
+
+ADD_USER_EMAIL_VERIFICATION_COLUMNS_SQL = """
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = current_schema()
+          AND table_name = 'users'
+          AND column_name = 'is_verified'
+    ) THEN
+        ALTER TABLE users
+        ADD COLUMN is_verified BOOLEAN NOT NULL DEFAULT FALSE;
+
+        UPDATE users
+        SET is_verified = TRUE,
+            updated_at = now();
+    END IF;
+
+    IF NOT EXISTS (
+        SELECT 1
+        FROM information_schema.columns
+        WHERE table_schema = current_schema()
+          AND table_name = 'users'
+          AND column_name = 'verification_token'
+    ) THEN
+        ALTER TABLE users
+        ADD COLUMN verification_token UUID;
+    END IF;
+END $$;
+"""
+
+CREATE_USERS_VERIFICATION_TOKEN_INDEX_SQL = """
+CREATE UNIQUE INDEX IF NOT EXISTS users_verification_token_unique
+ON users(verification_token)
+WHERE verification_token IS NOT NULL;
 """
 
 CREATE_TRIP_RUNS_TABLE_SQL = """
@@ -81,6 +121,8 @@ WHERE status = 'completed' AND count_applied = true;
 
 PICNIX_SCHEMA_STATEMENTS = (
     CREATE_USERS_TABLE_SQL,
+    ADD_USER_EMAIL_VERIFICATION_COLUMNS_SQL,
+    CREATE_USERS_VERIFICATION_TOKEN_INDEX_SQL,
     CREATE_TRIP_RUNS_TABLE_SQL,
     ADD_TRIP_RUNS_TITLE_SQL,
     ADD_TRIP_RUNS_PLAN_SUMMARY_SQL,
@@ -130,6 +172,8 @@ class UserRecord:
     email: str
     password_hash: str
     trips_planned: int
+    is_verified: bool
+    verification_token: UUID | None = None
 
 
 @dataclass(frozen=True)
@@ -202,19 +246,48 @@ def create_user(
             return cursor.fetchone() is not None
 
 
-def get_user(connection_source: Any, username: str) -> UserRecord | None:
-    """Return the persisted user record for a normalized username."""
+def set_user_verification_token(
+    connection_source: Any,
+    *,
+    username: str,
+    verification_token: UUID,
+) -> bool:
+    normalized_username = normalize_username(username)
     with _connection(connection_source) as connection:
         with connection.cursor() as cursor:
             cursor.execute(
                 """
-                SELECT username, email, password_hash, trips_planned
-                FROM users
+                UPDATE users
+                SET is_verified = FALSE,
+                    verification_token = %s,
+                    updated_at = now()
                 WHERE username = %s
+                RETURNING username
                 """,
-                (normalize_username(username),),
+                (verification_token, normalized_username),
+            )
+            return cursor.fetchone() is not None
+
+
+def verify_user_by_token(connection_source: Any, verification_token: UUID) -> UserRecord | None:
+    with _connection(connection_source) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                UPDATE users
+                SET is_verified = TRUE,
+                    verification_token = NULL,
+                    updated_at = now()
+                WHERE verification_token = %s
+                RETURNING username, email, password_hash, trips_planned, is_verified, verification_token
+                """,
+                (verification_token,),
             )
             row = cursor.fetchone()
+    return _user_record_from_row(row)
+
+
+def _user_record_from_row(row: dict[str, Any] | None) -> UserRecord | None:
     if row is None:
         return None
     return UserRecord(
@@ -222,7 +295,25 @@ def get_user(connection_source: Any, username: str) -> UserRecord | None:
         email=row["email"],
         password_hash=row["password_hash"],
         trips_planned=int(row["trips_planned"]),
+        is_verified=bool(row.get("is_verified", False)),
+        verification_token=row.get("verification_token"),
     )
+
+
+def get_user(connection_source: Any, username: str) -> UserRecord | None:
+    """Return the persisted user record for a normalized username."""
+    with _connection(connection_source) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT username, email, password_hash, trips_planned, is_verified, verification_token
+                FROM users
+                WHERE username = %s
+                """,
+                (normalize_username(username),),
+            )
+            row = cursor.fetchone()
+    return _user_record_from_row(row)
 
 
 def get_trips_planned(connection_source: Any, username: str) -> int:

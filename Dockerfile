@@ -14,6 +14,7 @@ RUN uv export --frozen --no-dev --format requirements-txt --output-file /tmp/req
     && rm /tmp/requirements.txt
 
 COPY app.py ./
+COPY email_utils.py ./
 COPY .streamlit ./.streamlit
 COPY config ./config
 COPY docs ./docs

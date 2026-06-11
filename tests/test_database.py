@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -66,10 +67,12 @@ def test_initialize_picnix_schema_executes_all_schema_statements() -> None:
 
     assert executed == list(database.PICNIX_SCHEMA_STATEMENTS)
     assert "CREATE TABLE IF NOT EXISTS users" in executed[0]
-    assert "CREATE TABLE IF NOT EXISTS trip_runs" in executed[1]
-    assert "ALTER TABLE trip_runs" in executed[2]
-    assert "CREATE UNIQUE INDEX IF NOT EXISTS trip_runs_one_running_per_user" in executed[6]
-    assert "CREATE INDEX IF NOT EXISTS trip_runs_history_by_user_completed_at" in executed[7]
+    assert "ADD COLUMN is_verified" in executed[1]
+    assert "users_verification_token_unique" in executed[2]
+    assert "CREATE TABLE IF NOT EXISTS trip_runs" in executed[3]
+    assert "ALTER TABLE trip_runs" in executed[4]
+    assert "CREATE UNIQUE INDEX IF NOT EXISTS trip_runs_one_running_per_user" in executed[8]
+    assert "CREATE INDEX IF NOT EXISTS trip_runs_history_by_user_completed_at" in executed[9]
 
 
 def test_load_auth_credentials_shapes_rows_for_streamlit_authenticator() -> None:
@@ -165,6 +168,78 @@ def test_create_user_returns_false_on_conflict() -> None:
         email="alice@example.com",
         password_hash="$2b$hash",
     ) is False
+
+
+def test_set_user_verification_token_marks_user_unverified() -> None:
+    token = uuid4()
+    calls: list[tuple[str, tuple | None]] = []
+
+    class FakeCursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args) -> None:
+            return None
+
+        def execute(self, statement: str, params: tuple | None = None) -> None:
+            calls.append((statement, params))
+
+        def fetchone(self) -> dict:
+            return {"username": "alice"}
+
+    class FakeConnection:
+        def cursor(self) -> FakeCursor:
+            return FakeCursor()
+
+    assert database.set_user_verification_token(
+        FakeConnection(),
+        username=" Alice ",
+        verification_token=token,
+    )
+    assert "SET is_verified = FALSE" in calls[0][0]
+    assert calls[0][1] == (token, "alice")
+
+
+def test_verify_user_by_token_marks_user_verified_and_clears_token() -> None:
+    token = UUID("11111111-1111-1111-1111-111111111111")
+    calls: list[tuple[str, tuple | None]] = []
+
+    class FakeCursor:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args) -> None:
+            return None
+
+        def execute(self, statement: str, params: tuple | None = None) -> None:
+            calls.append((statement, params))
+
+        def fetchone(self) -> dict:
+            return {
+                "username": "alice",
+                "email": "alice@example.com",
+                "password_hash": "$2b$hash",
+                "trips_planned": 0,
+                "is_verified": True,
+                "verification_token": None,
+            }
+
+    class FakeConnection:
+        def cursor(self) -> FakeCursor:
+            return FakeCursor()
+
+    user = database.verify_user_by_token(FakeConnection(), token)
+
+    assert user == database.UserRecord(
+        username="alice",
+        email="alice@example.com",
+        password_hash="$2b$hash",
+        trips_planned=0,
+        is_verified=True,
+        verification_token=None,
+    )
+    assert "verification_token = NULL" in calls[0][0]
+    assert calls[0][1] == (token,)
 
 
 def test_get_trips_planned_returns_persisted_counter_and_limit_for_missing_user() -> None:

@@ -7,6 +7,7 @@ from app import (
     food_availability_rows,
     format_duration,
     format_km,
+    _first_query_param,
     is_completed_plan_snapshot,
     plan_history_caption,
     plan_history_summary,
@@ -200,6 +201,13 @@ def test_validate_signup_fields_reports_invalid_values() -> None:
     assert "Enter a valid email address." in errors
     assert "Password must be at least 8 characters." in errors
     assert "Passwords do not match." in errors
+
+
+def test_first_query_param_accepts_streamlit_string_or_list_values() -> None:
+    assert _first_query_param("token") == "token"
+    assert _first_query_param(["token", "other"]) == "token"
+    assert _first_query_param([]) == ""
+    assert _first_query_param(None) == ""
 
 
 class FakeSnapshot:

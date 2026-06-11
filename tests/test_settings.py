@@ -13,6 +13,12 @@ REQUIRED_ENV_KEYS = [
 
 OPTIONAL_ENV_KEYS = [
     "GOOGLE_APPLICATION_CREDENTIALS",
+    "LLM_RETRY_ATTEMPTS",
+    "LLM_RETRY_BACKOFF_MIN_SECONDS",
+    "LLM_RETRY_BACKOFF_MAX_SECONDS",
+    "RESEND_API_KEY",
+    "RESEND_FROM_EMAIL",
+    "APP_BASE_URL",
     "DEBUG",
     "OBSERVABILITY_ENABLED",
     "ARIZE_PRODUCT",
@@ -41,6 +47,12 @@ ENV_EXAMPLE_EXPECTED_LINES = {
     "GOOGLE_CLOUD_PROJECT": "GOOGLE_CLOUD_PROJECT=",
     "GOOGLE_CLOUD_LOCATION": "GOOGLE_CLOUD_LOCATION=",
     "GOOGLE_APPLICATION_CREDENTIALS": "GOOGLE_APPLICATION_CREDENTIALS=",
+    "LLM_RETRY_ATTEMPTS": "LLM_RETRY_ATTEMPTS=5",
+    "LLM_RETRY_BACKOFF_MIN_SECONDS": "LLM_RETRY_BACKOFF_MIN_SECONDS=1",
+    "LLM_RETRY_BACKOFF_MAX_SECONDS": "LLM_RETRY_BACKOFF_MAX_SECONDS=30",
+    "RESEND_API_KEY": "RESEND_API_KEY=",
+    "RESEND_FROM_EMAIL": 'RESEND_FROM_EMAIL="Picnix <onboarding@resend.dev>"',
+    "APP_BASE_URL": "APP_BASE_URL=http://localhost:8501",
     "DEBUG": "DEBUG=false",
     "OBSERVABILITY_ENABLED": "OBSERVABILITY_ENABLED=false",
     "ARIZE_PRODUCT": "ARIZE_PRODUCT=phoenix",
@@ -98,6 +110,12 @@ def test_load_settings_reads_dotenv_file(tmp_path: Path, monkeypatch) -> None:
                 "GOOGLE_CLOUD_PROJECT=picnix-gcp",
                 "GOOGLE_CLOUD_LOCATION=asia-south1",
                 "GOOGLE_APPLICATION_CREDENTIALS=",
+                "LLM_RETRY_ATTEMPTS=4",
+                "LLM_RETRY_BACKOFF_MIN_SECONDS=0.5",
+                "LLM_RETRY_BACKOFF_MAX_SECONDS=8",
+                "RESEND_API_KEY=resend-key",
+                "RESEND_FROM_EMAIL=Picnix <verify@example.com>",
+                "APP_BASE_URL=http://picnix.example:8501",
                 "DEBUG=true",
                 "OBSERVABILITY_ENABLED=true",
                 "ARIZE_PRODUCT=phoenix",
@@ -123,6 +141,12 @@ def test_load_settings_reads_dotenv_file(tmp_path: Path, monkeypatch) -> None:
     assert settings.google_cloud_location == "asia-south1"
     assert settings.google_application_credentials == ""
     assert settings.vertex_auth_mode == "adc"
+    assert settings.llm_retry_attempts == 4
+    assert settings.llm_retry_backoff_min_seconds == 0.5
+    assert settings.llm_retry_backoff_max_seconds == 8.0
+    assert settings.resend_api_key == "resend-key"
+    assert settings.resend_from_email == "Picnix <verify@example.com>"
+    assert settings.app_base_url == "http://picnix.example:8501"
     assert settings.debug is True
     assert settings.observability_enabled is True
     assert settings.arize_product == "phoenix"
@@ -167,6 +191,12 @@ def test_missing_required_keys_reports_blank_values(tmp_path: Path, monkeypatch)
     assert settings.auth_cookie_name == "picnix_auth"
     assert settings.auth_cookie_key == settings_module.LOCAL_AUTH_COOKIE_KEY
     assert settings.auth_cookie_expiry_days == 30.0
+    assert settings.llm_retry_attempts == 5
+    assert settings.llm_retry_backoff_min_seconds == 1.0
+    assert settings.llm_retry_backoff_max_seconds == 30.0
+    assert settings.resend_api_key == ""
+    assert settings.resend_from_email == "Picnix <onboarding@resend.dev>"
+    assert settings.app_base_url == "http://localhost:8501"
 
 
 def test_service_account_path_switches_vertex_auth_mode(tmp_path: Path, monkeypatch) -> None:

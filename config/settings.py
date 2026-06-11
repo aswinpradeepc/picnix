@@ -10,6 +10,12 @@ MAPBOX_TOKEN_ENV = "MAPBOX_TOKEN"
 GOOGLE_CLOUD_PROJECT_ENV = "GOOGLE_CLOUD_PROJECT"
 GOOGLE_CLOUD_LOCATION_ENV = "GOOGLE_CLOUD_LOCATION"
 GOOGLE_APPLICATION_CREDENTIALS_ENV = "GOOGLE_APPLICATION_CREDENTIALS"
+LLM_RETRY_ATTEMPTS_ENV = "LLM_RETRY_ATTEMPTS"
+LLM_RETRY_BACKOFF_MIN_SECONDS_ENV = "LLM_RETRY_BACKOFF_MIN_SECONDS"
+LLM_RETRY_BACKOFF_MAX_SECONDS_ENV = "LLM_RETRY_BACKOFF_MAX_SECONDS"
+RESEND_API_KEY_ENV = "RESEND_API_KEY"
+RESEND_FROM_EMAIL_ENV = "RESEND_FROM_EMAIL"
+APP_BASE_URL_ENV = "APP_BASE_URL"
 DEBUG_ENV = "DEBUG"
 OBSERVABILITY_ENABLED_ENV = "OBSERVABILITY_ENABLED"
 ARIZE_PRODUCT_ENV = "ARIZE_PRODUCT"
@@ -40,6 +46,12 @@ class Settings:
     google_cloud_project: str
     google_cloud_location: str
     google_application_credentials: str
+    llm_retry_attempts: int = 5
+    llm_retry_backoff_min_seconds: float = 1.0
+    llm_retry_backoff_max_seconds: float = 30.0
+    resend_api_key: str = ""
+    resend_from_email: str = "Picnix <onboarding@resend.dev>"
+    app_base_url: str = "http://localhost:8501"
     debug: bool = False
     observability_enabled: bool = False
     arize_product: str = "phoenix"
@@ -75,6 +87,16 @@ def _env_float(key: str, default: float) -> float:
         return default
 
 
+def _env_int(key: str, default: int) -> int:
+    value = _env_value(key)
+    if not value:
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        return default
+
+
 def load_settings(env_file: str | Path = ".env", *, override: bool = False) -> Settings:
     """Load Picnix settings from a dotenv file and the process environment."""
     env_path = Path(env_file)
@@ -87,6 +109,13 @@ def load_settings(env_file: str | Path = ".env", *, override: bool = False) -> S
         google_cloud_project=_env_value(GOOGLE_CLOUD_PROJECT_ENV),
         google_cloud_location=_env_value(GOOGLE_CLOUD_LOCATION_ENV),
         google_application_credentials=_env_value(GOOGLE_APPLICATION_CREDENTIALS_ENV),
+        llm_retry_attempts=_env_int(LLM_RETRY_ATTEMPTS_ENV, 5),
+        llm_retry_backoff_min_seconds=_env_float(LLM_RETRY_BACKOFF_MIN_SECONDS_ENV, 1.0),
+        llm_retry_backoff_max_seconds=_env_float(LLM_RETRY_BACKOFF_MAX_SECONDS_ENV, 30.0),
+        resend_api_key=_env_value(RESEND_API_KEY_ENV),
+        resend_from_email=_env_value(RESEND_FROM_EMAIL_ENV)
+        or "Picnix <onboarding@resend.dev>",
+        app_base_url=_env_value(APP_BASE_URL_ENV) or "http://localhost:8501",
         debug=_env_bool(DEBUG_ENV),
         observability_enabled=_env_bool(OBSERVABILITY_ENABLED_ENV),
         arize_product=(_env_value(ARIZE_PRODUCT_ENV) or "phoenix").lower(),
@@ -122,6 +151,12 @@ MAPBOX_TOKEN = SETTINGS.mapbox_token
 GOOGLE_CLOUD_PROJECT = SETTINGS.google_cloud_project
 GOOGLE_CLOUD_LOCATION = SETTINGS.google_cloud_location
 GOOGLE_APPLICATION_CREDENTIALS = SETTINGS.google_application_credentials
+LLM_RETRY_ATTEMPTS = SETTINGS.llm_retry_attempts
+LLM_RETRY_BACKOFF_MIN_SECONDS = SETTINGS.llm_retry_backoff_min_seconds
+LLM_RETRY_BACKOFF_MAX_SECONDS = SETTINGS.llm_retry_backoff_max_seconds
+RESEND_API_KEY = SETTINGS.resend_api_key
+RESEND_FROM_EMAIL = SETTINGS.resend_from_email
+APP_BASE_URL = SETTINGS.app_base_url
 VERTEX_AUTH_MODE = SETTINGS.vertex_auth_mode
 DEBUG = SETTINGS.debug
 OBSERVABILITY_ENABLED = SETTINGS.observability_enabled

@@ -44,6 +44,12 @@ MAPBOX_TOKEN=
 GOOGLE_CLOUD_PROJECT=
 GOOGLE_CLOUD_LOCATION=<your-vertex-ai-region>  # e.g. us-central1; use "global" for gemini-3.1-pro-preview
 GOOGLE_APPLICATION_CREDENTIALS=
+LLM_RETRY_ATTEMPTS=5
+LLM_RETRY_BACKOFF_MIN_SECONDS=1
+LLM_RETRY_BACKOFF_MAX_SECONDS=30
+RESEND_API_KEY=
+RESEND_FROM_EMAIL="Picnix <onboarding@resend.dev>"
+APP_BASE_URL=http://localhost:8501
 ```
 
 For local Vertex AI auth, prefer Application Default Credentials and leave `GOOGLE_APPLICATION_CREDENTIALS` blank unless you are using a service account JSON:
@@ -95,6 +101,12 @@ GOOGLE_MAPS_API_KEY=
 MAPBOX_TOKEN=
 GOOGLE_CLOUD_PROJECT=
 GOOGLE_CLOUD_LOCATION=global
+LLM_RETRY_ATTEMPTS=5
+LLM_RETRY_BACKOFF_MIN_SECONDS=1
+LLM_RETRY_BACKOFF_MAX_SECONDS=30
+RESEND_API_KEY=
+RESEND_FROM_EMAIL="Picnix <onboarding@resend.dev>"
+APP_BASE_URL=http://<VM_EXTERNAL_IP>:8501
 
 POSTGRES_DB=picnix
 POSTGRES_USER=picnix
@@ -135,7 +147,7 @@ The compose file builds `DATABASE_URL` for the app from the `POSTGRES_*` values 
 
 The app is available at `http://<VM_EXTERNAL_IP>:8501`. The Phoenix dashboard is available at `http://<VM_EXTERNAL_IP>:6006`.
 
-Picnix accounts are created from the Streamlit sign-up tab. Passwords are stored as bcrypt hashes in Postgres. Each account can complete 5 trip plans; after that, graph execution is blocked for new planning actions.
+Picnix accounts are created from the Streamlit sign-up tab. Passwords are stored as bcrypt hashes in Postgres. New accounts must verify their email through Resend before graph execution is enabled. Each account can complete 5 trip plans; after that, graph execution is blocked for new planning actions.
 
 `PHOENIX_DEFAULT_ADMIN_INITIAL_PASSWORD` is only used when the persisted Phoenix volume first creates the admin account. Later password changes happen inside Phoenix.
 

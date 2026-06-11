@@ -7,6 +7,7 @@ import pydeck as pdk
 import streamlit as st
 import streamlit_authenticator as stauth
 
+from email_utils import EmailDeliveryError, send_verification_email
 from observability.bootstrap import configure_observability
 
 configure_observability()
@@ -24,14 +25,16 @@ from persistence.database import (
     create_connection_pool,
     create_postgres_checkpointer,
     create_user,
+    get_user,
     get_trips_planned,
-    has_trial_capacity,
     initialize_picnix_schema,
     list_plan_history,
     load_auth_credentials,
     mark_trip_completed,
     normalize_username,
+    set_user_verification_token,
     update_last_login,
+    verify_user_by_token,
 )
 from tools.gmaps import generate_gmaps_link
 from tools.mapbox import get_mapbox_token
@@ -290,12 +293,26 @@ def authenticated_username() -> str:
 
 
 def graph_execution_allowed(username: str) -> bool:
-    if has_trial_capacity(get_database_pool(), username):
+    user = get_user(get_database_pool(), username)
+    if user is None:
+        st.session_state.limit_reached_notice = "Sign in again before planning."
+        return False
+    if not user.is_verified:
+        st.session_state.limit_reached_notice = (
+            "Verify your email before planning a trip."
+        )
+        return False
+    if user.trips_planned < TRIAL_LIMIT:
         return True
     st.session_state.limit_reached_notice = (
         "Limit reached: this account has used all 5 completed trip plans."
     )
     return False
+
+
+def user_can_execute_graph(username: str) -> bool:
+    user = get_user(get_database_pool(), username)
+    return bool(user and user.is_verified and user.trips_planned < TRIAL_LIMIT)
 
 
 def _clear_plan_widget_state() -> None:
@@ -412,7 +429,60 @@ def render_signup_form() -> None:
     if not created:
         st.error("That username or email is already registered.")
         return
-    st.success("Account created. Log in to start planning.")
+
+    normalized_username = normalize_username(username)
+    normalized_email = email.strip().lower()
+    verification_token = uuid.uuid4()
+    token_saved = set_user_verification_token(
+        get_database_pool(),
+        username=normalized_username,
+        verification_token=verification_token,
+    )
+    if not token_saved:
+        st.error("Account created, but verification setup failed. Try logging in later.")
+        return
+
+    try:
+        send_verification_email(
+            to_email=normalized_email,
+            username=normalized_username,
+            verification_token=verification_token,
+        )
+    except EmailDeliveryError as exc:
+        st.warning(
+            "Account created, but Picnix could not send the verification email. "
+            "Graph planning will stay disabled until the email is verified."
+        )
+        st.caption(str(exc))
+        return
+
+    st.success("Account created. Check your email to verify your account before planning.")
+
+
+def _first_query_param(value: Any) -> str:
+    if isinstance(value, list):
+        return str(value[0]) if value else ""
+    return str(value or "")
+
+
+def handle_email_verification_query() -> None:
+    raw_token = _first_query_param(st.query_params.get("verify"))
+    if not raw_token:
+        return
+
+    try:
+        verification_token = uuid.UUID(raw_token)
+    except ValueError:
+        st.query_params.clear()
+        st.error("That verification link is invalid.")
+        return
+
+    user = verify_user_by_token(get_database_pool(), verification_token)
+    st.query_params.clear()
+    if user is None:
+        st.error("That verification link is invalid or has already been used.")
+        return
+    st.success("Email verified. You can now log in and start planning.")
 
 
 def render_auth_gate() -> tuple[str, stauth.Authenticate] | None:
@@ -458,6 +528,14 @@ def render_limit_reached(trips_planned: int) -> None:
     st.info(
         f"This account has completed {trips_planned}/{TRIAL_LIMIT} trip plans. "
         "Start a new account to continue testing Picnix."
+    )
+
+
+def render_email_verification_required(email: str) -> None:
+    st.title("Verify Email")
+    st.info(
+        f"Check {email} for your Picnix verification link. "
+        "Trip planning is disabled until this account is verified."
     )
 
 
@@ -561,20 +639,20 @@ def render_selection_gallery(state: dict) -> None:
         st.warning(
             f"Please pick at most {max_destinations} stops — you selected {len(selected_indices)}."
         )
-    limit_reached = not has_trial_capacity(get_database_pool(), authenticated_username())
-    if limit_reached:
-        st.caption("Trial limit reached — destination planning is disabled for this account.")
+    execution_blocked = not user_can_execute_graph(authenticated_username())
+    if execution_blocked:
+        st.caption("Graph execution is disabled for this account.")
 
     confirm_col, more_col = st.columns(2)
     confirm = confirm_col.button(
         "Confirm selection",
         use_container_width=True,
-        disabled=not selected_indices or over_limit or limit_reached,
+        disabled=not selected_indices or over_limit or execution_blocked,
     )
     load_more = more_col.button(
         "Load more options",
         use_container_width=True,
-        disabled=limit_reached,
+        disabled=execution_blocked,
     )
 
     if confirm:
@@ -657,9 +735,9 @@ def render_plan_editor(state: dict) -> None:
     the thread through N8 → N4 → … → N7 and parks it here again with the new plan."""
     st.divider()
     st.subheader("Want to change anything?")
-    limit_reached = not has_trial_capacity(get_database_pool(), authenticated_username())
-    if limit_reached:
-        st.caption("Trial limit reached — plan editing is disabled for this account.")
+    execution_blocked = not user_can_execute_graph(authenticated_username())
+    if execution_blocked:
+        st.caption("Graph execution is disabled for this account.")
     with st.form("plan_edit_form", clear_on_submit=True):
         edit_instruction = st.text_input(
             "Want to change anything? Describe it.",
@@ -669,7 +747,7 @@ def render_plan_editor(state: dict) -> None:
         submitted = st.form_submit_button(
             "Update plan",
             use_container_width=True,
-            disabled=st.session_state.edit_in_flight or limit_reached,
+            disabled=st.session_state.edit_in_flight or execution_blocked,
         )
 
     if submitted and edit_instruction.strip() and not st.session_state.edit_in_flight:
@@ -782,6 +860,7 @@ def render_account_sidebar(
     username: str,
     authenticator: stauth.Authenticate,
     trips_planned: int,
+    is_verified: bool,
 ) -> None:
     with st.sidebar:
         st.caption(f"Signed in as {username}")
@@ -789,7 +868,7 @@ def render_account_sidebar(
         st.caption(f"{min(trips_planned, TRIAL_LIMIT)}/{TRIAL_LIMIT} completed trips")
         st.divider()
 
-        can_start_plan = trips_planned < TRIAL_LIMIT
+        can_start_plan = is_verified and trips_planned < TRIAL_LIMIT
         if st.button(
             "New plan",
             use_container_width=True,
@@ -798,7 +877,10 @@ def render_account_sidebar(
             start_new_plan_thread()
             st.rerun()
         if not can_start_plan:
-            st.caption("Trial limit reached — previous plans remain available.")
+            if is_verified:
+                st.caption("Trial limit reached — previous plans remain available.")
+            else:
+                st.caption("Verify your email before starting a plan.")
 
         st.subheader("Previous plans")
         history = list_plan_history(
@@ -827,6 +909,7 @@ def render_account_sidebar(
 
 def main() -> None:
     st.set_page_config(page_title="Picnix", layout="wide")
+    handle_email_verification_query()
 
     auth_context = render_auth_gate()
     if auth_context is None:
@@ -835,12 +918,29 @@ def main() -> None:
     username, authenticator = auth_context
     sync_authenticated_user(username)
 
-    trips_planned = get_trips_planned(get_database_pool(), username)
+    user = get_user(get_database_pool(), username)
+    if user is None:
+        st.session_state.authentication_status = None
+        st.error("Sign in again before planning.")
+        return
+
+    trips_planned = user.trips_planned
+    if not user.is_verified:
+        render_account_sidebar(
+            username=username,
+            authenticator=authenticator,
+            trips_planned=trips_planned,
+            is_verified=False,
+        )
+        render_email_verification_required(user.email)
+        return
+
     if "thread_id" not in st.session_state and trips_planned >= TRIAL_LIMIT:
         render_account_sidebar(
             username=username,
             authenticator=authenticator,
             trips_planned=trips_planned,
+            is_verified=user.is_verified,
         )
         render_limit_reached(trips_planned)
         return
@@ -857,6 +957,7 @@ def main() -> None:
         username=username,
         authenticator=authenticator,
         trips_planned=trips_planned,
+        is_verified=user.is_verified,
     )
 
     left, right = st.columns([0.4, 0.6])
