@@ -100,6 +100,9 @@ POSTGRES_DB=picnix
 POSTGRES_USER=picnix
 POSTGRES_PASSWORD=<strong database password>
 LANGGRAPH_STRICT_MSGPACK=true
+AUTH_COOKIE_NAME=picnix_auth
+AUTH_COOKIE_KEY=<generate with: openssl rand -hex 32>
+AUTH_COOKIE_EXPIRY_DAYS=30
 
 PHOENIX_ENABLE_AUTH=true
 PHOENIX_SECRET=<generate with: openssl rand -hex 32>
@@ -131,6 +134,8 @@ docker compose up -d --build app
 The compose file builds `DATABASE_URL` for the app from the `POSTGRES_*` values and waits for Postgres to report healthy before starting Streamlit.
 
 The app is available at `http://<VM_EXTERNAL_IP>:8501`. The Phoenix dashboard is available at `http://<VM_EXTERNAL_IP>:6006`.
+
+Picnix accounts are created from the Streamlit sign-up tab. Passwords are stored as bcrypt hashes in Postgres. Each account can complete 5 trip plans; after that, graph execution is blocked for new planning actions.
 
 `PHOENIX_DEFAULT_ADMIN_INITIAL_PASSWORD` is only used when the persisted Phoenix volume first creates the admin account. Later password changes happen inside Phoenix.
 

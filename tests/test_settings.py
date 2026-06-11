@@ -25,6 +25,9 @@ OPTIONAL_ENV_KEYS = [
     "POSTGRES_PASSWORD",
     "DATABASE_URL",
     "LANGGRAPH_STRICT_MSGPACK",
+    "AUTH_COOKIE_NAME",
+    "AUTH_COOKIE_KEY",
+    "AUTH_COOKIE_EXPIRY_DAYS",
     "PHOENIX_ENABLE_AUTH",
     "PHOENIX_SECRET",
     "PHOENIX_DEFAULT_ADMIN_INITIAL_PASSWORD",
@@ -50,6 +53,9 @@ ENV_EXAMPLE_EXPECTED_LINES = {
     "POSTGRES_PASSWORD": "POSTGRES_PASSWORD=picnix",
     "DATABASE_URL": "DATABASE_URL=postgresql://picnix:picnix@localhost:5432/picnix",
     "LANGGRAPH_STRICT_MSGPACK": "LANGGRAPH_STRICT_MSGPACK=true",
+    "AUTH_COOKIE_NAME": "AUTH_COOKIE_NAME=picnix_auth",
+    "AUTH_COOKIE_KEY": "AUTH_COOKIE_KEY=",
+    "AUTH_COOKIE_EXPIRY_DAYS": "AUTH_COOKIE_EXPIRY_DAYS=30",
     "PHOENIX_ENABLE_AUTH": "PHOENIX_ENABLE_AUTH=false",
     "PHOENIX_SECRET": "PHOENIX_SECRET=",
     "PHOENIX_DEFAULT_ADMIN_INITIAL_PASSWORD": "PHOENIX_DEFAULT_ADMIN_INITIAL_PASSWORD=",
@@ -100,6 +106,9 @@ def test_load_settings_reads_dotenv_file(tmp_path: Path, monkeypatch) -> None:
                 "PHOENIX_API_KEY=phoenix-key",
                 "PHOENIX_COLLECTOR_ENDPOINT=http://phoenix.example:6006",
                 "DATABASE_URL=postgresql://picnix:secret@db:5432/picnix",
+                "AUTH_COOKIE_NAME=picnix_test_auth",
+                "AUTH_COOKIE_KEY=test-cookie-key",
+                "AUTH_COOKIE_EXPIRY_DAYS=7",
             ]
         ),
         encoding="utf-8",
@@ -122,6 +131,9 @@ def test_load_settings_reads_dotenv_file(tmp_path: Path, monkeypatch) -> None:
     assert settings.phoenix_api_key == "phoenix-key"
     assert settings.phoenix_collector_endpoint == "http://phoenix.example:6006"
     assert settings.database_url == "postgresql://picnix:secret@db:5432/picnix"
+    assert settings.auth_cookie_name == "picnix_test_auth"
+    assert settings.auth_cookie_key == "test-cookie-key"
+    assert settings.auth_cookie_expiry_days == 7.0
     assert settings_module.missing_required_keys(settings) == []
 
 
@@ -152,6 +164,9 @@ def test_missing_required_keys_reports_blank_values(tmp_path: Path, monkeypatch)
         "GOOGLE_CLOUD_LOCATION",
     ]
     assert settings.database_url == settings_module.LOCAL_DATABASE_URL
+    assert settings.auth_cookie_name == "picnix_auth"
+    assert settings.auth_cookie_key == settings_module.LOCAL_AUTH_COOKIE_KEY
+    assert settings.auth_cookie_expiry_days == 30.0
 
 
 def test_service_account_path_switches_vertex_auth_mode(tmp_path: Path, monkeypatch) -> None:

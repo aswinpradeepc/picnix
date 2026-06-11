@@ -7,7 +7,9 @@ from app import (
     food_availability_rows,
     format_duration,
     format_km,
+    is_completed_plan_snapshot,
     timeline_rows,
+    validate_signup_fields,
 )
 
 
@@ -117,6 +119,25 @@ def test_final_geojson_center_uses_feature_coordinates() -> None:
     assert center == {"latitude": 10.1, "longitude": 76.4, "zoom": 9}
 
 
+def test_validate_signup_fields_accepts_valid_values() -> None:
+    assert validate_signup_fields(
+        "alice-1",
+        "alice@example.com",
+        "strong-pass",
+        "strong-pass",
+    ) == []
+
+
+def test_validate_signup_fields_reports_invalid_values() -> None:
+    errors = validate_signup_fields("a!", "alice", "short", "different")
+
+    assert "Username must be at least 3 characters." in errors
+    assert "Username can only contain letters, numbers, hyphens, and underscores." in errors
+    assert "Enter a valid email address." in errors
+    assert "Password must be at least 8 characters." in errors
+    assert "Passwords do not match." in errors
+
+
 class FakeSnapshot:
     def __init__(self, values: dict, next_nodes: tuple) -> None:
         self.values = values
@@ -152,6 +173,30 @@ def test_advance_graph_resumes_confirmed_n4_pauses_until_parked_at_n8() -> None:
 
     assert graph.resumes == 2
     assert snapshot.next == ("n8_editor",)
+
+
+def test_is_completed_plan_snapshot_requires_n8_interrupt_and_final_output() -> None:
+    assert is_completed_plan_snapshot(
+        FakeSnapshot(
+            {
+                "final_itinerary": "Plan",
+                "final_geojson": {"type": "FeatureCollection", "features": []},
+            },
+            ("n8_editor",),
+        )
+    )
+    assert not is_completed_plan_snapshot(
+        FakeSnapshot({"final_itinerary": "Plan", "final_geojson": {}}, ("n8_editor",))
+    )
+    assert not is_completed_plan_snapshot(
+        FakeSnapshot(
+            {
+                "final_itinerary": "Plan",
+                "final_geojson": {"type": "FeatureCollection", "features": []},
+            },
+            (),
+        )
+    )
 
 
 def test_advance_graph_stops_at_unconfirmed_n4_pause_for_the_gallery() -> None:

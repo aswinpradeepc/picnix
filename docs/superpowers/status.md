@@ -1,6 +1,6 @@
 # Picnix Project Status
 
-Last updated: 2026-06-11 (BACKEND-PERSIST-3: PostgreSQL schema initialization and LangGraph Postgres checkpointing)
+Last updated: 2026-06-11 (BACKEND-PERSIST-4: Streamlit auth and strict 5-trip trial gatekeeper)
 
 ## Source Of Truth
 
@@ -40,6 +40,7 @@ Last updated: 2026-06-11 (BACKEND-PERSIST-3: PostgreSQL schema initialization an
 - Phoenix-first observability bootstrap: `observability/bootstrap.py` calls `phoenix.otel.register(...)` and the OpenInference `LangChainInstrumentor` before graph imports in `app.py`. Controlled by `OBSERVABILITY_ENABLED=false`, `ARIZE_PRODUCT=phoenix`, and `OBSERVABILITY_CAPTURE_CONTENT=false` by default for local runs. The local Phoenix server is available through the optional `phoenix` extra. The deployment path is now a single GCP Compute Engine VM running Docker Compose with `app`, `phoenix`, and `db`; the app sends traces to `http://phoenix:6006/v1/traces`. Phoenix dashboard auth is enabled via `.env` and the app uses `PHOENIX_API_KEY` after a Phoenix system key is created. Manual node/tool spans and Arize AX are deferred. (OBS-1, DEPLOY-OBS, ADR-009, BACKEND-PERSIST-2)
 - Docker deployment artifacts: root `Dockerfile` builds the Streamlit app with `uv`; root `docker-compose.yml` runs `postgres:15`, `arizephoenix/phoenix:latest`, and the Picnix app, exposes ports 6006/4317/8501, persists Phoenix data in `phoenix-data`, persists database data in `postgres-data`, waits for Postgres health before app startup, and mounts local ADC credentials into the app container. (DEPLOY-OBS, BACKEND-PERSIST-2)
 - Database persistence module: `persistence/database.py` creates the psycopg connection pool from `DATABASE_URL`, provisions Picnix-owned `users` and `trip_runs` tables, and runs LangGraph `PostgresSaver.setup()` before graph compilation. (BACKEND-PERSIST-3)
+- Streamlit authentication and trial gatekeeper: unauthenticated users see only Login / Sign Up, registration stores bcrypt password hashes in Postgres, runtime graph actions are blocked when `users.trips_planned >= 5`, and completed plans are counted idempotently after N7 parks the graph at `n8_editor`. (BACKEND-PERSIST-4)
 
 ## Current Fixed Limits
 
@@ -90,8 +91,8 @@ Backend, user management, and production persistence are now promoted into activ
 - `streamlit-authenticator`, `langgraph-checkpoint-postgres`, `psycopg`, and `psycopg-pool` are installed.
 - Runtime graph checkpointing now uses LangGraph `PostgresSaver` backed by a psycopg connection pool.
 - Database startup now provisions Picnix-owned `users` and `trip_runs` tables plus LangGraph checkpoint tables.
-- Streamlit still needs authenticated registration/login through `streamlit-authenticator`.
-- Trial enforcement will block graph execution once `users.trips_planned >= 5` and will increment only after N7 successfully completes for a graph thread.
+- Streamlit has authenticated registration/login through `streamlit-authenticator`.
+- Trial enforcement blocks graph execution once `users.trips_planned >= 5` and increments only after N7 successfully completes for a graph thread.
 
 Future-scope items from `design-context.md` remain out of scope unless explicitly promoted: FastAPI, production frontend, multi-day planning, Arize AX, and manual observability spans. Auth and persistence are now promoted into active scope by ADR-010.
 

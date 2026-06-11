@@ -18,8 +18,12 @@ OBSERVABILITY_CAPTURE_CONTENT_ENV = "OBSERVABILITY_CAPTURE_CONTENT"
 PHOENIX_API_KEY_ENV = "PHOENIX_API_KEY"
 PHOENIX_COLLECTOR_ENDPOINT_ENV = "PHOENIX_COLLECTOR_ENDPOINT"
 DATABASE_URL_ENV = "DATABASE_URL"
+AUTH_COOKIE_NAME_ENV = "AUTH_COOKIE_NAME"
+AUTH_COOKIE_KEY_ENV = "AUTH_COOKIE_KEY"
+AUTH_COOKIE_EXPIRY_DAYS_ENV = "AUTH_COOKIE_EXPIRY_DAYS"
 
 LOCAL_DATABASE_URL = "postgresql://picnix:picnix@localhost:5432/picnix"
+LOCAL_AUTH_COOKIE_KEY = "picnix-local-auth-cookie-key"
 
 REQUIRED_ENV_KEYS = (
     GOOGLE_MAPS_API_KEY_ENV,
@@ -44,6 +48,9 @@ class Settings:
     phoenix_api_key: str = ""
     phoenix_collector_endpoint: str = ""
     database_url: str = LOCAL_DATABASE_URL
+    auth_cookie_name: str = "picnix_auth"
+    auth_cookie_key: str = LOCAL_AUTH_COOKIE_KEY
+    auth_cookie_expiry_days: float = 30.0
 
     @property
     def vertex_auth_mode(self) -> str:
@@ -56,6 +63,16 @@ def _env_value(key: str) -> str:
 
 def _env_bool(key: str) -> bool:
     return _env_value(key).lower() in ("1", "true", "yes")
+
+
+def _env_float(key: str, default: float) -> float:
+    value = _env_value(key)
+    if not value:
+        return default
+    try:
+        return float(value)
+    except ValueError:
+        return default
 
 
 def load_settings(env_file: str | Path = ".env", *, override: bool = False) -> Settings:
@@ -78,6 +95,9 @@ def load_settings(env_file: str | Path = ".env", *, override: bool = False) -> S
         phoenix_api_key=_env_value(PHOENIX_API_KEY_ENV),
         phoenix_collector_endpoint=_env_value(PHOENIX_COLLECTOR_ENDPOINT_ENV),
         database_url=_env_value(DATABASE_URL_ENV) or LOCAL_DATABASE_URL,
+        auth_cookie_name=_env_value(AUTH_COOKIE_NAME_ENV) or "picnix_auth",
+        auth_cookie_key=_env_value(AUTH_COOKIE_KEY_ENV) or LOCAL_AUTH_COOKIE_KEY,
+        auth_cookie_expiry_days=_env_float(AUTH_COOKIE_EXPIRY_DAYS_ENV, 30.0),
     )
 
 
@@ -111,3 +131,6 @@ OBSERVABILITY_CAPTURE_CONTENT = SETTINGS.observability_capture_content
 PHOENIX_API_KEY = SETTINGS.phoenix_api_key
 PHOENIX_COLLECTOR_ENDPOINT = SETTINGS.phoenix_collector_endpoint
 DATABASE_URL = SETTINGS.database_url
+AUTH_COOKIE_NAME = SETTINGS.auth_cookie_name
+AUTH_COOKIE_KEY = SETTINGS.auth_cookie_key
+AUTH_COOKIE_EXPIRY_DAYS = SETTINGS.auth_cookie_expiry_days

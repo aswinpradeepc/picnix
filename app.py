@@ -5,16 +5,31 @@ from typing import Any
 
 import pydeck as pdk
 import streamlit as st
+import streamlit_authenticator as stauth
 
 from observability.bootstrap import configure_observability
 
 configure_observability()
 
+from config.settings import SETTINGS
 from graph.graph import (
     build_graph,
     initial_trip_state,
     load_more_candidates,
     selection_updates,
+)
+from persistence.database import (
+    TRIAL_LIMIT,
+    create_connection_pool,
+    create_postgres_checkpointer,
+    create_user,
+    get_trips_planned,
+    has_trial_capacity,
+    initialize_picnix_schema,
+    load_auth_credentials,
+    mark_trip_completed,
+    normalize_username,
+    update_last_login,
 )
 from tools.gmaps import generate_gmaps_link
 from tools.mapbox import get_mapbox_token
@@ -117,6 +132,38 @@ def final_geojson_center(final_geojson: dict) -> dict:
 MAX_AUTO_RESUMES = 10
 
 
+def validate_signup_fields(
+    username: str,
+    email: str,
+    password: str,
+    password_repeat: str,
+) -> list[str]:
+    """Return user-facing validation errors for the DB-backed sign-up form."""
+    errors: list[str] = []
+    normalized_username = normalize_username(username)
+    normalized_email = email.strip().lower()
+    if len(normalized_username) < 3:
+        errors.append("Username must be at least 3 characters.")
+    if not normalized_username.replace("_", "").replace("-", "").isalnum():
+        errors.append("Username can only contain letters, numbers, hyphens, and underscores.")
+    if "@" not in normalized_email or "." not in normalized_email.rsplit("@", 1)[-1]:
+        errors.append("Enter a valid email address.")
+    if len(password) < 8:
+        errors.append("Password must be at least 8 characters.")
+    if password != password_repeat:
+        errors.append("Passwords do not match.")
+    return errors
+
+
+def is_completed_plan_snapshot(snapshot: Any) -> bool:
+    """A graph run has finished N7 when it is parked before N8 with final output present."""
+    return (
+        "n8_editor" in tuple(snapshot.next)
+        and bool(snapshot.values.get("final_itinerary"))
+        and bool(snapshot.values.get("final_geojson"))
+    )
+
+
 def advance_graph(graph: Any, config: dict) -> Any:
     """Resume the parked graph until it actually needs user input, then return the snapshot.
 
@@ -136,8 +183,49 @@ def advance_graph(graph: Any, config: dict) -> Any:
 
 
 @st.cache_resource
+def get_database_pool() -> Any:
+    pool = create_connection_pool()
+    initialize_picnix_schema(pool)
+    return pool
+
+
+@st.cache_resource
 def get_graph() -> Any:
-    return build_graph()
+    return build_graph(checkpointer=create_postgres_checkpointer(get_database_pool()))
+
+
+def build_authenticator(credentials: dict) -> stauth.Authenticate:
+    return stauth.Authenticate(
+        credentials,
+        SETTINGS.auth_cookie_name,
+        SETTINGS.auth_cookie_key,
+        SETTINGS.auth_cookie_expiry_days,
+        auto_hash=False,
+    )
+
+
+def authenticated_username() -> str:
+    return normalize_username(str(st.session_state.get("username") or ""))
+
+
+def graph_execution_allowed(username: str) -> bool:
+    if has_trial_capacity(get_database_pool(), username):
+        return True
+    st.session_state.limit_reached_notice = (
+        "Limit reached: this account has used all 5 completed trip plans."
+    )
+    return False
+
+
+def record_completed_trip_if_ready(username: str, snapshot: Any) -> None:
+    if not is_completed_plan_snapshot(snapshot):
+        return
+    if mark_trip_completed(
+        get_database_pool(),
+        username=username,
+        thread_id=st.session_state.thread_id,
+    ):
+        st.session_state.partial_demo_notice = "Plan ready."
 
 
 def thread_config() -> dict:
@@ -146,6 +234,19 @@ def thread_config() -> dict:
 
 def current_snapshot() -> Any:
     return get_graph().get_state(thread_config())
+
+
+def sync_authenticated_user(username: str) -> None:
+    if st.session_state.get("authenticated_username") == username:
+        return
+    st.session_state.authenticated_username = username
+    for key in (
+        "thread_id",
+        "partial_demo_notice",
+        "edit_in_flight",
+        "limit_reached_notice",
+    ):
+        st.session_state.pop(key, None)
 
 
 def ensure_session_state() -> None:
@@ -158,6 +259,89 @@ def ensure_session_state() -> None:
         st.session_state.partial_demo_notice = ""
     if "edit_in_flight" not in st.session_state:
         st.session_state.edit_in_flight = False
+    if "limit_reached_notice" not in st.session_state:
+        st.session_state.limit_reached_notice = ""
+
+
+def render_signup_form() -> None:
+    with st.form("signup_form", clear_on_submit=True):
+        st.subheader("Sign Up")
+        username = st.text_input("Username", autocomplete="username")
+        email = st.text_input("Email", autocomplete="email")
+        password = st.text_input("Password", type="password", autocomplete="new-password")
+        password_repeat = st.text_input(
+            "Repeat password",
+            type="password",
+            autocomplete="new-password",
+        )
+        submitted = st.form_submit_button("Create account", use_container_width=True)
+
+    if not submitted:
+        return
+
+    errors = validate_signup_fields(username, email, password, password_repeat)
+    if errors:
+        for error in errors:
+            st.error(error)
+        return
+
+    password_hash = stauth.Hasher.hash(password)
+    created = create_user(
+        get_database_pool(),
+        username=username,
+        email=email,
+        password_hash=password_hash,
+    )
+    if not created:
+        st.error("That username or email is already registered.")
+        return
+    st.success("Account created. Log in to start planning.")
+
+
+def render_auth_gate() -> tuple[str, stauth.Authenticate] | None:
+    credentials = load_auth_credentials(get_database_pool())
+    authenticator = build_authenticator(credentials)
+
+    if st.session_state.get("authentication_status"):
+        username = authenticated_username()
+        if username in credentials.get("usernames", {}):
+            update_last_login(get_database_pool(), username)
+            return username, authenticator
+        st.session_state.authentication_status = None
+        st.session_state.username = ""
+
+    st.title("Picnix")
+    login_tab, signup_tab = st.tabs(["Login", "Sign Up"])
+    with login_tab:
+        try:
+            authenticator.login(
+                location="main",
+                max_login_attempts=5,
+                clear_on_submit=True,
+            )
+        except Exception as exc:
+            st.error(str(exc))
+
+        auth_status = st.session_state.get("authentication_status")
+        if auth_status is False:
+            st.error("Username/password is incorrect.")
+        elif auth_status is None:
+            st.info("Log in or create an account to plan trips.")
+
+    with signup_tab:
+        render_signup_form()
+
+    if st.session_state.get("authentication_status"):
+        st.rerun()
+    return None
+
+
+def render_limit_reached(trips_planned: int) -> None:
+    st.title("Limit Reached")
+    st.info(
+        f"This account has completed {trips_planned}/{TRIAL_LIMIT} trip plans. "
+        "Start a new account to continue testing Picnix."
+    )
 
 
 def render_chat(state: dict) -> None:
@@ -215,6 +399,9 @@ def render_clarification_options(state: dict) -> None:
 def handle_user_message(user_message: str) -> None:
     """Run one N1 turn on the graph thread; once constraints land, the same run
     continues through N2/N3 and parks at the N4 selection interrupt."""
+    username = authenticated_username()
+    if not graph_execution_allowed(username):
+        return
     graph = get_graph()
     config = thread_config()
     state = graph.get_state(config).values
@@ -224,7 +411,8 @@ def handle_user_message(user_message: str) -> None:
     ]
     with st.spinner("Thinking through the trip constraints..."):
         graph.invoke({"raw_messages": messages}, config)
-        advance_graph(graph, config)
+        snapshot = advance_graph(graph, config)
+        record_completed_trip_if_ready(username, snapshot)
 
 
 def render_selection_gallery(state: dict) -> None:
@@ -256,16 +444,26 @@ def render_selection_gallery(state: dict) -> None:
         st.warning(
             f"Please pick at most {max_destinations} stops — you selected {len(selected_indices)}."
         )
+    limit_reached = not has_trial_capacity(get_database_pool(), authenticated_username())
+    if limit_reached:
+        st.caption("Trial limit reached — destination planning is disabled for this account.")
 
     confirm_col, more_col = st.columns(2)
     confirm = confirm_col.button(
         "Confirm selection",
         use_container_width=True,
-        disabled=not selected_indices or over_limit,
+        disabled=not selected_indices or over_limit or limit_reached,
     )
-    load_more = more_col.button("Load more options", use_container_width=True)
+    load_more = more_col.button(
+        "Load more options",
+        use_container_width=True,
+        disabled=limit_reached,
+    )
 
     if confirm:
+        username = authenticated_username()
+        if not graph_execution_allowed(username):
+            st.rerun()
         graph = get_graph()
         config = thread_config()
         with st.spinner("Building, validating, and writing the itinerary..."):
@@ -277,13 +475,18 @@ def render_selection_gallery(state: dict) -> None:
                 as_node="n3_validator",
             )
             graph.invoke(None, config)
-            final_state = advance_graph(graph, config).values
+            snapshot = advance_graph(graph, config)
+            record_completed_trip_if_ready(username, snapshot)
+            final_state = snapshot.values
         st.session_state.partial_demo_notice = (
             "Plan ready." if final_state.get("final_itinerary") else ""
         )
         st.rerun()
 
     if load_more:
+        username = authenticated_username()
+        if not graph_execution_allowed(username):
+            st.rerun()
         graph = get_graph()
         config = thread_config()
         with st.spinner("Validating more options..."):
@@ -337,6 +540,9 @@ def render_plan_editor(state: dict) -> None:
     the thread through N8 → N4 → … → N7 and parks it here again with the new plan."""
     st.divider()
     st.subheader("Want to change anything?")
+    limit_reached = not has_trial_capacity(get_database_pool(), authenticated_username())
+    if limit_reached:
+        st.caption("Trial limit reached — plan editing is disabled for this account.")
     with st.form("plan_edit_form", clear_on_submit=True):
         edit_instruction = st.text_input(
             "Want to change anything? Describe it.",
@@ -346,10 +552,13 @@ def render_plan_editor(state: dict) -> None:
         submitted = st.form_submit_button(
             "Update plan",
             use_container_width=True,
-            disabled=st.session_state.edit_in_flight,
+            disabled=st.session_state.edit_in_flight or limit_reached,
         )
 
     if submitted and edit_instruction.strip() and not st.session_state.edit_in_flight:
+        username = authenticated_username()
+        if not graph_execution_allowed(username):
+            st.rerun()
         st.session_state.edit_in_flight = True
         graph = get_graph()
         config = thread_config()
@@ -363,7 +572,9 @@ def render_plan_editor(state: dict) -> None:
                     },
                 )
                 graph.invoke(None, config)
-                final_state = advance_graph(graph, config).values
+                snapshot = advance_graph(graph, config)
+                record_completed_trip_if_ready(username, snapshot)
+                final_state = snapshot.values
         finally:
             st.session_state.edit_in_flight = False
         st.session_state.partial_demo_notice = (
@@ -448,26 +659,70 @@ def render_trip_map(final_geojson: dict) -> None:
     st.pydeck_chart(deck, use_container_width=True)
 
 
+def render_account_sidebar(
+    *,
+    username: str,
+    authenticator: stauth.Authenticate,
+    trips_planned: int,
+) -> None:
+    with st.sidebar:
+        st.caption(f"Signed in as {username}")
+        st.progress(min(trips_planned, TRIAL_LIMIT) / TRIAL_LIMIT)
+        st.caption(f"{min(trips_planned, TRIAL_LIMIT)}/{TRIAL_LIMIT} completed trips")
+        authenticator.logout("Logout", location="sidebar", key="picnix_logout")
+
+
 def main() -> None:
     st.set_page_config(page_title="Picnix", layout="wide")
+
+    auth_context = render_auth_gate()
+    if auth_context is None:
+        return
+
+    username, authenticator = auth_context
+    sync_authenticated_user(username)
+
+    trips_planned = get_trips_planned(get_database_pool(), username)
+    if "thread_id" not in st.session_state and trips_planned >= TRIAL_LIMIT:
+        render_account_sidebar(
+            username=username,
+            authenticator=authenticator,
+            trips_planned=trips_planned,
+        )
+        render_limit_reached(trips_planned)
+        return
+
     ensure_session_state()
 
     snapshot = current_snapshot()
+    record_completed_trip_if_ready(username, snapshot)
+    trips_planned = get_trips_planned(get_database_pool(), username)
     state = dict(snapshot.values)
     next_nodes = tuple(snapshot.next)
+
+    render_account_sidebar(
+        username=username,
+        authenticator=authenticator,
+        trips_planned=trips_planned,
+    )
 
     left, right = st.columns([0.4, 0.6])
     with left:
         st.title("Picnix")
+        if st.session_state.limit_reached_notice:
+            st.warning(st.session_state.limit_reached_notice)
         render_chat(state)
-        render_clarification_options(state)
-        if state.get("constraints"):
-            st.caption("Constraints locked in — tweak the plan from the editor on the right.")
-        elif user_message := st.chat_input(
-            "Tell me your trip mood, starting point, time, and vehicle"
-        ):
-            handle_user_message(user_message)
-            st.rerun()
+        if trips_planned >= TRIAL_LIMIT:
+            st.caption("Trial limit reached — graph execution is disabled for this account.")
+        else:
+            render_clarification_options(state)
+            if state.get("constraints"):
+                st.caption("Constraints locked in — tweak the plan from the editor on the right.")
+            elif user_message := st.chat_input(
+                "Tell me your trip mood, starting point, time, and vehicle"
+            ):
+                handle_user_message(user_message)
+                st.rerun()
 
     with right:
         st.title("Trip Preview")

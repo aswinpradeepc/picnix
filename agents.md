@@ -47,6 +47,9 @@ OBSERVABILITY_CAPTURE_CONTENT=false
 PHOENIX_API_KEY=             # Phoenix system API key when self-hosted auth is enabled
 PHOENIX_COLLECTOR_ENDPOINT=  # optional; local Phoenix OTLP collector defaults to localhost:4317
 DATABASE_URL=                # optional; defaults to local Postgres fallback in config/settings.py
+AUTH_COOKIE_NAME=picnix_auth
+AUTH_COOKIE_KEY=             # generate a strong random value for deployment
+AUTH_COOKIE_EXPIRY_DAYS=30
 ```
 
 ### Required Google Cloud APIs
@@ -169,3 +172,4 @@ Node responsibilities at a glance:
 | 2026-06-11 | BACKEND-PERSIST-1 | Phase 1 docs for backend/auth/persistence milestone. Added ADR-010, moved auth/database out of hard out-of-scope, and documented PostgreSQL + streamlit-authenticator + LangGraph Postgres checkpointing direction. |
 | 2026-06-11 | BACKEND-PERSIST-2 | Phase 2 dependency and infrastructure setup. Added streamlit-authenticator, psycopg/psycopg-pool, langgraph-checkpoint-postgres, DATABASE_URL config, and a health-checked PostgreSQL db service with postgres-data volume. |
 | 2026-06-11 | BACKEND-PERSIST-3 | Phase 3 database initialization and graph persistence. Added persistence/database.py schema setup for users/trip_runs, LangGraph PostgresSaver setup, and build_graph checkpointer injection with Postgres as the runtime default. |
+| 2026-06-11 | BACKEND-PERSIST-4 | Phase 4 auth and trial gatekeeper. Streamlit login/sign-up uses streamlit-authenticator, users persist in Postgres with hashed passwords, graph execution is blocked at 5 completed trips, and N7 completion increments are idempotent per thread. |
