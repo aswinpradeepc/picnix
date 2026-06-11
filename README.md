@@ -51,6 +51,81 @@ gcloud auth application-default login
 gcloud auth application-default set-quota-project <GOOGLE_CLOUD_PROJECT>
 ```
 
+## Observability
+
+Phoenix tracing is available but disabled by default. The app includes the Phoenix exporter by default and the Phoenix server as an optional `uv` extra for local demos.
+
+In one terminal, start the local Phoenix dashboard:
+
+```bash
+PHOENIX_WORKING_DIR=.phoenix uv run --extra phoenix phoenix serve
+```
+
+The dashboard opens at:
+
+```text
+http://127.0.0.1:6006
+```
+
+In `.env`, enable tracing:
+
+```text
+OBSERVABILITY_ENABLED=true
+ARIZE_PRODUCT=phoenix
+ARIZE_PROJECT_NAME=picnix-local
+```
+
+Then run Picnix normally. Local Phoenix accepts traces on its default OTLP collector (`localhost:4317`), so `PHOENIX_COLLECTOR_ENDPOINT` can stay blank.
+If tracing is enabled before Phoenix is reachable, the app keeps running and OpenTelemetry will log exporter warnings until a collector is available.
+
+## Docker Compose Deployment
+
+The current deployment target is a single GCP Compute Engine VM running Docker Compose. The compose stack runs exactly two services:
+
+- `phoenix` — self-hosted Phoenix UI and OTLP trace collector.
+- `app` — Picnix Streamlit app, sending traces to `http://phoenix:6006/v1/traces` over the compose network.
+
+Prepare `.env` on the VM before starting the stack:
+
+```text
+GOOGLE_MAPS_API_KEY=
+MAPBOX_TOKEN=
+GOOGLE_CLOUD_PROJECT=
+GOOGLE_CLOUD_LOCATION=global
+
+PHOENIX_ENABLE_AUTH=true
+PHOENIX_SECRET=<generate with: openssl rand -hex 32>
+PHOENIX_DEFAULT_ADMIN_INITIAL_PASSWORD=<strong initial password>
+PHOENIX_ENABLE_STRONG_PASSWORD_POLICY=true
+PHOENIX_CSRF_TRUSTED_ORIGINS=http://<VM_EXTERNAL_IP>:6006
+PHOENIX_API_KEY=
+```
+
+First start Phoenix, log in, and create a system API key:
+
+```bash
+docker compose up -d phoenix
+```
+
+Open `http://<VM_EXTERNAL_IP>:6006` and log in with:
+
+```text
+Email: admin@localhost
+Password: <PHOENIX_DEFAULT_ADMIN_INITIAL_PASSWORD>
+```
+
+After first login, create a Phoenix system API key from settings, write it into `.env` as `PHOENIX_API_KEY`, then start the app:
+
+```bash
+docker compose up -d --build app
+```
+
+The app is available at `http://<VM_EXTERNAL_IP>:8501`. The Phoenix dashboard is available at `http://<VM_EXTERNAL_IP>:6006`.
+
+`PHOENIX_DEFAULT_ADMIN_INITIAL_PASSWORD` is only used when the persisted Phoenix volume first creates the admin account. Later password changes happen inside Phoenix.
+
+The current compose file sets `OBSERVABILITY_CAPTURE_CONTENT=true` for debugging visibility in Phoenix. Change that value to `"false"` in `docker-compose.yml` before handling sensitive real-user traffic.
+
 ## Tests
 
 Run the default suite:

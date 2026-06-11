@@ -1,0 +1,44 @@
+services:
+  phoenix:
+    image: arizephoenix/phoenix:latest
+    ports:
+      - "6006:6006"
+      - "4317:4317"
+    environment:
+      PHOENIX_WORKING_DIR: /mnt/data
+      PHOENIX_ENABLE_AUTH: ${PHOENIX_ENABLE_AUTH:-false}
+      PHOENIX_SECRET: ${PHOENIX_SECRET:-}
+      PHOENIX_DEFAULT_ADMIN_INITIAL_PASSWORD: ${PHOENIX_DEFAULT_ADMIN_INITIAL_PASSWORD:-admin}
+      PHOENIX_ENABLE_STRONG_PASSWORD_POLICY: ${PHOENIX_ENABLE_STRONG_PASSWORD_POLICY:-true}
+      PHOENIX_CSRF_TRUSTED_ORIGINS: ${PHOENIX_CSRF_TRUSTED_ORIGINS:-}
+    volumes:
+      - phoenix-data:/mnt/data
+    restart: unless-stopped
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    env_file:
+      - .env
+    environment:
+      OBSERVABILITY_ENABLED: "true"
+      ARIZE_PRODUCT: phoenix
+      ARIZE_PROJECT_NAME: picnix-vm
+      OBSERVABILITY_CAPTURE_CONTENT: "true"
+      PHOENIX_COLLECTOR_ENDPOINT: http://phoenix:6006/v1/traces
+      PHOENIX_API_KEY: ${PHOENIX_API_KEY:-}
+      # Tell the app where the credentials live inside the container
+      GOOGLE_APPLICATION_CREDENTIALS: /app/adc.json
+    ports:
+      - "8501:8501"
+    depends_on:
+      - phoenix
+    restart: unless-stopped
+    volumes:
+      # Map your host's local ADC file directly to the container
+      - ~/.config/gcloud/application_default_credentials.json:/app/adc.json:ro
+
+# Top-level volumes block only holds named volumes
+volumes:
+  phoenix-data:

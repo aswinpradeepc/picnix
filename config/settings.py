@@ -11,6 +11,12 @@ GOOGLE_CLOUD_PROJECT_ENV = "GOOGLE_CLOUD_PROJECT"
 GOOGLE_CLOUD_LOCATION_ENV = "GOOGLE_CLOUD_LOCATION"
 GOOGLE_APPLICATION_CREDENTIALS_ENV = "GOOGLE_APPLICATION_CREDENTIALS"
 DEBUG_ENV = "DEBUG"
+OBSERVABILITY_ENABLED_ENV = "OBSERVABILITY_ENABLED"
+ARIZE_PRODUCT_ENV = "ARIZE_PRODUCT"
+ARIZE_PROJECT_NAME_ENV = "ARIZE_PROJECT_NAME"
+OBSERVABILITY_CAPTURE_CONTENT_ENV = "OBSERVABILITY_CAPTURE_CONTENT"
+PHOENIX_API_KEY_ENV = "PHOENIX_API_KEY"
+PHOENIX_COLLECTOR_ENDPOINT_ENV = "PHOENIX_COLLECTOR_ENDPOINT"
 
 REQUIRED_ENV_KEYS = (
     GOOGLE_MAPS_API_KEY_ENV,
@@ -28,6 +34,12 @@ class Settings:
     google_cloud_location: str
     google_application_credentials: str
     debug: bool = False
+    observability_enabled: bool = False
+    arize_product: str = "phoenix"
+    arize_project_name: str = "picnix-local"
+    observability_capture_content: bool = False
+    phoenix_api_key: str = ""
+    phoenix_collector_endpoint: str = ""
 
     @property
     def vertex_auth_mode(self) -> str:
@@ -36,6 +48,10 @@ class Settings:
 
 def _env_value(key: str) -> str:
     return os.getenv(key, "").strip()
+
+
+def _env_bool(key: str) -> bool:
+    return _env_value(key).lower() in ("1", "true", "yes")
 
 
 def load_settings(env_file: str | Path = ".env", *, override: bool = False) -> Settings:
@@ -50,7 +66,13 @@ def load_settings(env_file: str | Path = ".env", *, override: bool = False) -> S
         google_cloud_project=_env_value(GOOGLE_CLOUD_PROJECT_ENV),
         google_cloud_location=_env_value(GOOGLE_CLOUD_LOCATION_ENV),
         google_application_credentials=_env_value(GOOGLE_APPLICATION_CREDENTIALS_ENV),
-        debug=_env_value(DEBUG_ENV).lower() in ("1", "true", "yes"),
+        debug=_env_bool(DEBUG_ENV),
+        observability_enabled=_env_bool(OBSERVABILITY_ENABLED_ENV),
+        arize_product=(_env_value(ARIZE_PRODUCT_ENV) or "phoenix").lower(),
+        arize_project_name=_env_value(ARIZE_PROJECT_NAME_ENV) or "picnix-local",
+        observability_capture_content=_env_bool(OBSERVABILITY_CAPTURE_CONTENT_ENV),
+        phoenix_api_key=_env_value(PHOENIX_API_KEY_ENV),
+        phoenix_collector_endpoint=_env_value(PHOENIX_COLLECTOR_ENDPOINT_ENV),
     )
 
 
@@ -77,3 +99,9 @@ GOOGLE_CLOUD_LOCATION = SETTINGS.google_cloud_location
 GOOGLE_APPLICATION_CREDENTIALS = SETTINGS.google_application_credentials
 VERTEX_AUTH_MODE = SETTINGS.vertex_auth_mode
 DEBUG = SETTINGS.debug
+OBSERVABILITY_ENABLED = SETTINGS.observability_enabled
+ARIZE_PRODUCT = SETTINGS.arize_product
+ARIZE_PROJECT_NAME = SETTINGS.arize_project_name
+OBSERVABILITY_CAPTURE_CONTENT = SETTINGS.observability_capture_content
+PHOENIX_API_KEY = SETTINGS.phoenix_api_key
+PHOENIX_COLLECTOR_ENDPOINT = SETTINGS.phoenix_collector_endpoint

@@ -94,3 +94,80 @@ Status legend: **Deferred** = agreed to revisit later; **Open** = no decision ye
 
 - These items were raised in the session that implemented CS4 (2026-06-09). They are intentionally **not** in `next_milestone.md` yet to avoid implying they are scheduled.
 - The current CS4 decisions they supersede are recorded as **Accepted (current)** in `docs/adr/ADR-007-multi-destination-routing.md`, with these future revisits noted.
+
+---
+
+## FS-4 — User-pinned destinations & schedule negotiation
+
+**Today:** Every destination comes out of N2 discovery. The user can only choose from what N2/N3 surface. If the user *names* places up front ("start from CUSAT, go to Malayattoor, then Speedway Thrissur, eat at Thomson Casa"), N1 has nowhere to put them — they become "interests" at best and are lost.
+
+**Desired behavior:**
+- N1 extracts named places as **pinned stops** (a new constraint class, distinct from interests): `pinned_stops: [{query_text, role}]` where `role` is `visit` or `meal`.
+- A resolution step (N2 or a new N2b) converts each `query_text` into a real place via Places Text Search → place_id, then routes it through the **same N3 validation** as discovered candidates (hours, travel time, known issues). Pinned places get no validation shortcuts.
+- N4 plans all pinned stops into one timeline so that each stop's open hours and any meal window are satisfied — i.e., the timings of all pinned places "fall in place".
+- **Infeasibility is negotiated, never silently resolved.** If no ordering/timing makes the pinned set fit, the system must come back to the user with concrete options: (a) drop a named stop (showing which one and the time it would free), or (b) shift `departure_time` / extend `duration_hours` by a stated amount that *would* make it fit. The user chooses. This is the pinned-stop analogue of FS-2 and should reuse its interactive-removal surface.
+- A pinned stop that fails N3 validation (permanently closed, closed that day, unreachable) is reported by name with the reason. The system may *offer* a similar nearby alternative, but never substitutes one silently — same principle as the N5 no-silent-switch rule.
+
+**Considerations:**
+- Resolution ambiguity: "Speedway Thrissur" may match multiple places; low-confidence matches need a one-tap "did you mean…" confirmation in the interrupt UI before planning.
+- Ordering: with 3+ pinned stops, visit order materially affects feasibility. FS-4 effectively requires FS-1 (order optimization) first — testing permutations against open-hours windows is the core of "make the timings fall in place".
+- Meal-pinned stops ("food from Thomson Casa") are a hard food_availability entry: N4's dynamic food search is skipped for that meal and replaced by an open-hours/timing check on the named restaurant.
+- Mixed mode: pinned stops + "and suggest one more place on the way" means discovery (N2) must fill gaps *around* fixed anchors — discovery becomes constrained by the pinned skeleton's geometry and leftover time, not a free radius.
+- Time-window pins ("reach X by 2pm") are a natural extension: per-stop hard arrival windows checked in N4/N5.
+
+**Touches:** N1 (extraction), N2/new N2b (resolution), N3 (validate pinned), N4 (windowed scheduling), N5 (negotiation path instead of auto-drop for pinned stops), interrupt UI, `TripState` (`pinned_stops`, per-stop time windows).
+
+**Sequencing:** FS-1 → FS-2 → FS-4. FS-4's negotiation UX is FS-2 generalized.
+
+---
+
+## FS-5 — Open-jaw trips (start ≠ end) with on-route discovery
+
+**Today:** Every plan is a round trip — N2's reachable radius, N4's `start → stops → start` chaining, and N7's pins all assume the user returns to the start point.
+
+**Desired behavior:**
+- N1 accepts an optional `end_location` distinct from `start_location` ("start from CUSAT, end at College of Engineering TVM, spend time somewhere in between").
+- Time budgeting changes: available exploration time = `duration_hours − travel(start→end via stops)`. The baseline direct travel time start→end is computed first; what remains is the budget for dwell + detour.
+- Discovery changes from a radius around the start to a **corridor along the start→end route**: compute the direct route polyline, sample points along it (reuse the ADR-005 `_point_on_polyline` machinery — same primitive, different purpose), and run Places searches around those samples. Candidates are scored by detour cost (added travel time vs. the direct route), not distance from start.
+- N4 builds `start → stops → end` with no return leg; N7 renders distinct start and end pins and drops the "return home" timeline entry.
+
+**Considerations:**
+- The `(duration_hours − 2) / 2` one-way radius formula in N2 is meaningless here and needs a corridor-specific replacement (e.g., max detour minutes per stop).
+- "On the way" is directional — a great place 10 min *behind* the start is a bad suggestion; detour-cost scoring handles this naturally where radius scoring cannot.
+- Round trip becomes the special case `end_location == start_location`; ideally the corridor model subsumes the current radius model rather than living beside it.
+- Combines with FS-4: open-jaw + pinned stops ("CUSAT → Malayattoor → end in TVM") is the general case — pinned anchors define the corridor segments, discovery fills between them.
+
+**Touches:** N1 (end_location), N2 (corridor discovery + scoring), N4 (open-jaw chaining), N5 (time checks against arrival-at-end), N7 (start/end pins), `TripState` (`constraints["end_location"]`).
+
+---
+
+## FS-6 — Candidate cases to fold into FS-4/FS-5 when designed (parking list)
+
+- **Anchor-last planning:** "end with dinner at <named place>" — a single pinned terminal stop, everything before it discovered. Cheapest first slice of FS-4.
+- **Via-only waypoints:** "go via the Athirappilly road" — a route shaping constraint with zero dwell time, distinct from a stop.
+- **Per-stop arrival deadlines:** "be at the church before 9am mass" — hard time windows, superset of open-hours checks.
+- **Pinned stop on a different day's schedule:** user names a place that's closed today; offer the nearest day it works instead of just rejecting (requires multi-day awareness — likely out of scope until the multiday graph exists).
+- **Return-by constraint:** "I must be back by 6pm" as a hard end-of-trip deadline rather than a soft duration — N5 should treat overrun as `error`, not `warning`.
+
+---
+
+## FS-7 — Arize AX production observability
+
+**Status:** Deferred. Phoenix is the active observability target for ADR-009.
+
+**Current behavior:**
+- Observability is Phoenix-first and opt-in via `OBSERVABILITY_ENABLED=true` and `ARIZE_PRODUCT=phoenix`.
+- `app.py` installs OpenInference LangChain instrumentation globally before LangGraph/LangChain imports.
+- Manual node/tool spans are intentionally deferred.
+
+**Desired behavior:**
+- Promote observability to Arize AX when Picnix has the backend, user/session model, and deployment surface needed for production operations.
+- Add AX environment variables, exporter configuration, dashboards, and production monitoring workflows.
+- Define which trace attributes become product metrics (success/failure, validation rejections, route build latency, edit success, user-visible fallback paths).
+
+**Open questions:**
+- What production identity should traces carry once user management exists: anonymous session ID, user ID, trip ID, or all three?
+- Which trace content, if any, may be retained in production?
+- Should AX adoption happen before or after the FastAPI/backend milestone?
+
+**Touches:** observability bootstrap, environment configuration, deployment secrets, backend request/session IDs, privacy policy, dashboards/alerts.

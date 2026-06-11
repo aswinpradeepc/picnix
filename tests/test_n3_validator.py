@@ -117,18 +117,16 @@ def test_validate_destination_rejects_route_that_exceeds_budget() -> None:
     ]
 
 
-def test_validate_destination_rejects_known_place_issue_from_markdown() -> None:
+def test_validate_destination_does_not_reject_when_default_known_issue_file_is_empty() -> None:
     result = validate_destination(
         base_state(candidate_name="Anamudi Peak"),
         gmaps_client=FakeGMaps(),
         trip_start=datetime(2026, 5, 31, 7, 0),
     )
 
-    assert "validated_candidates" not in result
+    assert result["validated_candidates"][0]["place_id"] == "place-1"
     assert result["candidate_index"] == 1
-    assert result["validation_failures"] == [
-        "Anamudi Peak rejected: known place issue: Permit required; check the DFO office before suggesting."
-    ]
+    assert result["validation_failures"] == []
 
 
 def test_validate_destination_reads_known_place_issue_from_supplied_markdown(tmp_path) -> None:

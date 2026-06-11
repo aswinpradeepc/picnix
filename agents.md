@@ -25,8 +25,9 @@ This file is the shared reference for every agent (Claude Code, Codex, Antigravi
 | UI framework | Streamlit |
 | Config | `python-dotenv`, `.env` file for all keys |
 | Package management | `uv`, with `pyproject.toml` and `uv.lock` |
+| Observability | Phoenix via OpenInference LangChain auto-instrumentation. Disabled by default for local runs; the Docker Compose deployment enables it and sends traces to the self-hosted Phoenix container. Local Phoenix server is optional via `uv run --extra phoenix phoenix serve`. |
 
-**No other external services.** No Overpass, no ORS, no OSRM, no OpenStreetMap API calls. Google Maps handles all geo data. Mapbox handles all rendering.
+**No other external planning/geo services.** No Overpass, no ORS, no OSRM, no OpenStreetMap API calls. Google Maps handles all geo data. Mapbox handles all rendering. Phoenix is allowed only for observability under ADR-009.
 
 ### Environment Variables
 
@@ -36,6 +37,12 @@ MAPBOX_TOKEN=
 GOOGLE_CLOUD_PROJECT=        # your GCP project ID
 GOOGLE_CLOUD_LOCATION=       # Vertex AI region, e.g. us-central1
 GOOGLE_APPLICATION_CREDENTIALS=  # optional; leave blank/unset for local ADC OAuth
+OBSERVABILITY_ENABLED=false  # optional Phoenix tracing
+ARIZE_PRODUCT=phoenix
+ARIZE_PROJECT_NAME=picnix-local
+OBSERVABILITY_CAPTURE_CONTENT=false
+PHOENIX_API_KEY=             # Phoenix system API key when self-hosted auth is enabled
+PHOENIX_COLLECTOR_ENDPOINT=  # optional; local Phoenix OTLP collector defaults to localhost:4317
 ```
 
 ### Required Google Cloud APIs
@@ -59,17 +66,21 @@ Use `uv` for dependency management. `pyproject.toml` is the single source of tru
 - Streamlit UI
 - Google Maps API integrations (Places, Geocoding, Routes)
 - Mapbox rendering via pydeck
+- Phoenix observability through global OpenInference LangChain instrumentation
+- Docker Compose deployment for the observability milestone: Picnix app + self-hosted Phoenix only
 
 ---
 
 ## What Is Explicitly Out of Scope — Do Not Build These
 
 - FastAPI endpoints
-- LangSmith / Arize observability tooling
+- LangSmith observability tooling
+- Arize AX production observability
+- Manual node/tool span instrumentation
 - User authentication or session management
 - Any database or persistent storage
 - Production web frontend
-- Docker / cloud deployment
+- Docker / cloud deployment beyond the current observability-only Compose stack
 - Token usage tracking
 
 ---
@@ -84,6 +95,7 @@ graph/nodes/                — One file per node. Each node owns its section of
 tools/gmaps.py              — All Google Maps HTTP calls. No business logic here.
 tools/mapbox.py             — Mapbox token helpers only.
 config/settings.py          — All env var loading. No hardcoded strings elsewhere.
+observability/bootstrap.py   — Phoenix/OpenInference setup. Called before graph imports; no manual spans in current scope.
 docs/known-place-issues.md  — Durable place-level exceptions. Update here, not in node code.
 agents.md                   — This file. Update when scope, stack, or ownership changes.
 ```
@@ -140,3 +152,5 @@ Node responsibilities at a glance:
 | 2026-06-10 | CS6 | Google Maps export link. tools/gmaps.py gains generate_gmaps_link(timeline) — pure round-trip URL: origin=start, destination=start, waypoints=all destination stops. app.py render_plan shows st.link_button("Open in Google Maps 🗺️") after final itinerary. |
 | 2026-06-10 | CS7 | Hybrid itinerary format. N6 system prompt: bold section header + one warm prose sentence (vibe) + 2–3 bullet points (key facts/tips) per stop. prose schema description updated to match. |
 | 2026-06-10 | CS8 | Region-agnostic. N6 system prompt: removed "Kerala local" identity and Malayalam warmth phrases; replaced with locally neutral tone instruction. known-place-issues.md: removed Kerala-specific rows (Anamudi Peak, Eravikulam NP), added region-agnostic header. README: removed Kerala reference, generalised GOOGLE_CLOUD_LOCATION example. |
+| 2026-06-11 | OBS-1 | Phoenix-first observability. Added ADR-009, Phoenix/OpenInference env vars, global LangChain/LangGraph auto-instrumentation bootstrap, optional local Phoenix server extra, and deferred Arize AX/manual spans to future scope. |
+| 2026-06-11 | DEPLOY-OBS | Docker Compose observability deployment: app + self-hosted Phoenix on one GCP Compute Engine VM, Phoenix auth env wiring, app traces routed to `http://phoenix:6006/v1/traces`. |

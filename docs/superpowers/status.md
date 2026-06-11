@@ -1,6 +1,6 @@
 # Picnix Project Status
 
-Last updated: 2026-06-10 (CS8: region-agnostic — all next_milestone.md change sets CS0–CS8 complete; AI layer MVP shipped)
+Last updated: 2026-06-11 (DEPLOY-OBS: Docker Compose app + self-hosted Phoenix verified; Phoenix auth enabled via .env)
 
 ## Source Of Truth
 
@@ -37,6 +37,8 @@ Last updated: 2026-06-10 (CS8: region-agnostic — all next_milestone.md change 
 - Google Maps deep-link export: `tools/gmaps.py` `generate_gmaps_link(timeline)` builds a round-trip URL (origin=start, destination=start, waypoints=all destination stops); rendered as `st.link_button("Open in Google Maps 🗺️")` after the final itinerary. (CS6)
 - N6 itinerary format updated to hybrid: one bold section header per stop + one punchy vibe sentence + 1–2 bullet points for must-know facts. (CS7)
 - Region-agnostic: N6 system prompt removes "Kerala local" identity and Malayalam warmth phrases; replaced with a locally neutral tone instruction. `docs/known-place-issues.md` cleared of Kerala-specific entries and given a region-agnostic header. `README.md` updated to remove Kerala reference. (CS8)
+- Phoenix-first observability bootstrap: `observability/bootstrap.py` calls `phoenix.otel.register(...)` and the OpenInference `LangChainInstrumentor` before graph imports in `app.py`. Controlled by `OBSERVABILITY_ENABLED=false`, `ARIZE_PRODUCT=phoenix`, and `OBSERVABILITY_CAPTURE_CONTENT=false` by default for local runs. The local Phoenix server is available through the optional `phoenix` extra. The deployment path is now a single GCP Compute Engine VM running Docker Compose with exactly two services: `app` and `phoenix`; the app sends traces to `http://phoenix:6006/v1/traces`. Phoenix dashboard auth is enabled via `.env` and the app uses `PHOENIX_API_KEY` after a Phoenix system key is created. Manual node/tool spans and Arize AX are deferred. (OBS-1, DEPLOY-OBS, ADR-009)
+- Docker deployment artifacts: root `Dockerfile` builds the Streamlit app with `uv`; root `docker-compose.yml` runs `arizephoenix/phoenix:latest` plus the Picnix app, exposes ports 6006/4317/8501, persists Phoenix data in `phoenix-data`, and mounts local ADC credentials into the app container.
 
 ## Current Fixed Limits
 
@@ -54,6 +56,7 @@ Last updated: 2026-06-10 (CS8: region-agnostic — all next_milestone.md change 
 - ADR-006: N5/N6 swap — validate structured N4 output before composing prose. Includes N5→N4 re-prompt loop design.
 - ADR-007: Multi-destination routing & stop selection (CS4) — single `computeRoutes` call with intermediate waypoints; current visit order = candidate-list order (no optimization); current removal = N5 auto-drops the last stop. Deferred revisits documented in `docs/future-scope.md` (FS-1 stop order, FS-2 user-driven removal).
 - ADR-008: N8 plan editor (CS5) — park-at-N8 interrupt model vs. conditional N7→END, closed-universe edits with FS-3 deferral, IDs-only LLM contract, app-side auto-resume rule for the N4 interrupt.
+- ADR-009: Phoenix-first observability — Phoenix is the active milestone target via OpenInference LangChain auto-instrumentation; deployment is self-hosted Phoenix + app on one Compute Engine VM via Docker Compose; Arize AX and manual spans are deferred.
 
 ## Deferred Discussions (Future Scope)
 
@@ -61,6 +64,7 @@ Last updated: 2026-06-10 (CS8: region-agnostic — all next_milestone.md change 
 - **FS-1** — Visit order of selected stops (geo-optimize vs. user-controlled vs. current candidate-list order).
 - **FS-2** — User-driven stop removal: when a plan does not fit, show the stops with distance / travel time / time-spent and let the user choose what to remove (replaces the current auto-drop-last behavior).
 - **FS-3** — Edit-time additions: validate edit-requested places on demand (so "add Kadamakudy lake view point" works when it isn't in the validated pool, and the place joins `validated_candidates`) and let food edits pin a user-named food stop ("dinner at Pathirakozhi, Kalamassery") that N4 respects on re-plans.
+- **FS-7** — Arize AX production observability, dashboards, and product monitoring workflow after backend/user/deployment shape is clearer.
 
 ## Designed But Not Yet Implemented
 
@@ -75,7 +79,7 @@ N1–N7 graph nodes and Streamlit demo are complete. Remaining change sets are f
 
 All next_milestone.md change sets (CS0–CS8) are complete. The AI layer MVP is shipped.
 
-- Future-scope items from `design-context.md` remain out of scope: FastAPI, auth, persistence, observability, production frontend, and multi-day planning.
+- Future-scope items from `design-context.md` remain out of scope unless explicitly promoted: FastAPI, auth, persistence, production frontend, multi-day planning, Arize AX, and manual observability spans.
 
 ## Latest Checkpoint
 

@@ -6,6 +6,10 @@ from typing import Any
 import pydeck as pdk
 import streamlit as st
 
+from observability.bootstrap import configure_observability
+
+configure_observability()
+
 from graph.graph import (
     build_graph,
     initial_trip_state,
