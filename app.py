@@ -851,6 +851,7 @@ def render_trip_map(final_geojson: dict) -> None:
             "html": "<b>{label}</b><br/>{time}<br/>{notes}",
             "style": {"backgroundColor": "#1f2937", "color": "white"},
         },
+        api_keys={"mapbox": mapbox_token},
     )
     st.pydeck_chart(deck, use_container_width=True)
 
